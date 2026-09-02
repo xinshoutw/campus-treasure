@@ -1,0 +1,36 @@
+# 題目庫。id 是五碼大寫英文字母，會印成 QR-Code 貼在現場。
+#
+# 每題欄位：
+#   id       必填  五碼大寫英文字母，不可重複
+#   content  必填  題目文字
+#   answer   必填  正確答案，必須完全等於 choices 其中一項
+#   choices  必填  2-10 個選項
+#   image    選填  http(s) 圖片網址（啟動時會下載快取到本地）
+#   points   選填  本題分數，預設 1
+
+questions:
+  - id: ABCDE
+    content: Linux 指令 sl 會出現什麼？
+    answer: 火車
+    choices:
+      - 火車
+      - 恐龍
+      - 企鵝
+
+  - id: RRRRR
+    content: 圖片中是誰？
+    image: https://i.meee.com.tw/BrfQoSs.png
+    points: 3
+    answer: 火車
+    choices:
+      - 火車
+      - 恐龍
+      - 企鵝
+
+  - id: ARRRR
+    content: https://music.youtube.com/ 是哪家公司的服務？
+    answer: Google
+    choices:
+      - Google
+      - Apple
+      - Microsoft
