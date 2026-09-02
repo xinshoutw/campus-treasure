@@ -52,7 +52,7 @@ function makeElement(id) {
 const LIVE_PHONES = [];   // check 結束要全部關掉，不然輪詢會一直累積下去
 
 class Phone {
-  constructor(name, base) {
+  constructor(name, base, seed) {
     this.name = name;
     this.delay = 0;        // 人為的網路延遲，毫秒
     this.inflight = 0;
@@ -67,7 +67,7 @@ class Phone {
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
-    const store = new Map();
+    const store = new Map(Object.entries(seed || {}));
     const sandbox = {
       console,
       setTimeout, clearTimeout, clearInterval,
@@ -239,6 +239,32 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("登入時網路一閃，恢復後會自己接回來", async () => {
+  const phone = new Phone("M1", BASE);
+  phone.hang = true;                     // 登入請求飛不回來
+  phone.login(MEMBER);                   // 不等
+  await phone.wait(500);
+  phone.hang = false;                    // 網路很快就回來了，但那一發已經卡住
+  await phone.wait(6500);                // 等它逾時
+  assert.match(phone.text("toast"), /網路/, "要先告訴使用者失敗了");
+
+  await phone.wait(2000);                // 輪詢自己拿存著的 token 重試
+  assert.equal(phone.screen(), "panel-wait", "應該自己接回來，不用重新整理");
+});
+
+check("存著的舊 token 失效後，重打新 token 仍然是登入", async () => {
+  // 真實情境：localStorage 裡有上一場留下的 token，開頁時自動登入失敗
+  const phone = new Phone("M1", BASE, { "treasure.token": "stale-token-from-last-time" });
+  await phone.wait(400);
+  assert.equal(phone.el("bar").hidden, true, "自動登入應該失敗");
+  assert.equal(phone.el("bar").hidden, true);
+
+  phone.el("entry-input").value = MEMBER;
+  phone.el("entry-form").fire("submit");
+  await phone.wait(300);
+  assert.equal(phone.screen(), "panel-wait", `重打正確 token 應該登入，toast=${phone.text("toast")}`);
+});
 
 check("卡住的請求會逾時，手機不會被凍住", async () => {
   const leader = new Phone("L", BASE);

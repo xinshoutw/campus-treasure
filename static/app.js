@@ -531,23 +531,26 @@ function parseToken(text) {
 async function login(value) {
   if (!value || busy) return;
   busy = true;
+  // 先存起來：網路一閃導致登入失敗時，輪詢才有東西可以拿去自動重試。
+  // 真的是無效 token 的話下面 401 會把它丟掉
+  store.set(KEY_TOKEN, value);
   try {
     const next = await api("/api/login", { method: "POST", body: JSON.stringify({ token: value }) });
     token = value;
-    store.set(KEY_TOKEN, value);
     apply(next);
-    startPolling();
   } catch (err) {
-    // 存著的 token 已經失效就丟掉，否則每次重整都會再失敗一次
-    if (err.status === 401) store.drop(KEY_TOKEN);
+    // token 沒清掉的話，之後在輸入框打字會被當成題目代碼送去 /api/scan，
+    // 這支手機就再也登不進來了，只能重新整理
+    token = null;
+    if (err.status === 401) store.drop(KEY_TOKEN);   // 過期的就別再試了
     toast(err.message);
+    renderLogin();
   } finally {
     busy = false;
   }
 }
 
 function logout() {
-  clearInterval(pollId);
   token = null;
   state = null;
   rendered = "";
@@ -564,7 +567,13 @@ function startPolling() {
 }
 
 async function refreshState() {
-  if (!token || busy || polling || document.hidden) return;
+  if (busy || polling || document.hidden) return;
+  if (!token) {
+    // 登入失敗（網路一閃）之後靠這裡自己接回來，不用使用者重新整理
+    const saved = store.get(KEY_TOKEN);
+    if (saved) login(saved);
+    return;
+  }
   polling = true;
   try {
     const next = await api("/api/state");
@@ -624,6 +633,7 @@ document.addEventListener("visibilitychange", () => {
 // ---------------------------------------------------------------- 啟動
 
 renderLogin();
+startPolling();          // 一開始就跑，登入失敗也才有機會自己重試
 
 const urlToken = new URLSearchParams(location.search).get("token");
 if (urlToken) {
