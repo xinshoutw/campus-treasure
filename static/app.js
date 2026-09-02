@@ -234,8 +234,7 @@ function renderVoting(next, fresh) {
     }
   }
 
-  el.qTally.textContent = `已投 ${next.voted}/${next.online} 人`
-    + (leader ? "" : " · 等候隊輔送出…");
+  el.qTally.textContent = `已投 ${next.voted}/${next.online} 人`;
   if (leader) updateSubmit(next, tie);
 }
 
