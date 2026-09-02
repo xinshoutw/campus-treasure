@@ -43,8 +43,10 @@ def build_items():
     備註只出現在終端機，用來對照哪張貼紙是哪一題。
     """
     site = os.getenv("SITE_URL", "https://treasure.ntust.org").rstrip("/")
+    # 備註只印 token 前 4 碼：夠對照哪張是哪隊，又不會把整把 token 留在
+    # 終端機捲動紀錄或 `make_qr.py > build.log` 裡。完整值在 .env
     items = [
-        (f"TEAM {number}", f"{site}/?token={token}", f"login_{number}", token)
+        (f"TEAM {number}", f"{site}/?token={token}", f"login_{number}", f"{token[:4]}…")
         for number, token in enumerate(TOKENS, 1)
     ]
     items += [(qid, qid, qid, q["content"][:30]) for qid, q in QUESTIONS.items()]
