@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+
+# 機密與執行期資料
+.env
+data.json
+data.json.tmp
+
+# 產生物
+static/cache/
+qr/
