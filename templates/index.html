@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#efe4cf">
+<meta name="robots" content="noindex">
+<title>校園尋寶</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header id="bar" class="bar" hidden>
+  <ol id="scores" class="scores"></ol>
+  <p id="progress" class="progress"></p>
+</header>
+
+<main class="wrap">
+
+  <!-- 登入與掃描共用同一個舞台，中間的相機區塊全程不重建 -->
+  <section id="stage" class="stage">
+    <div class="stage-head">
+      <h1 id="stage-title" class="display">校園尋寶</h1>
+      <p id="stage-hint" class="hint">掃描隊伍 QR-Code，或輸入登入 Token</p>
+    </div>
+
+    <div id="scanner" class="scanner" hidden>
+      <div class="viewfinder">
+        <video id="video" playsinline muted autoplay></video>
+        <div class="reticle" aria-hidden="true"></div>
+        <button id="cam-switch" class="cam-switch" type="button" aria-label="切換鏡頭">↻</button>
+      </div>
+      <p id="cam-label" class="cam-label" aria-live="polite"></p>
+    </div>
+
+    <button id="scan-toggle" class="ghost" type="button">掃描 QR-Code 登入</button>
+
+    <form id="entry-form" class="entry" autocomplete="off">
+      <input id="entry-input" class="field" type="text" spellcheck="false"
+             autocomplete="off" autocorrect="off" enterkeyhint="go">
+      <button id="entry-submit" class="btn" type="submit">登入</button>
+    </form>
+
+  </section>
+
+  <!-- 題目 -->
+  <section id="panel-question" class="panel" hidden>
+    <p id="q-meta" class="meta"></p>
+    <h2 id="q-content" class="display question"></h2>
+    <figure id="q-figure" class="figure" hidden><img id="q-image" alt=""></figure>
+    <div id="q-choices" class="choices" role="radiogroup" aria-label="選項"></div>
+    <button id="q-submit" class="btn" type="button" disabled>送出</button>
+    <button id="q-back" class="ghost" type="button">取消，回到掃描</button>
+  </section>
+
+  <!-- 結果 -->
+  <section id="panel-result" class="panel result" hidden>
+    <p id="r-mark" class="mark"></p>
+    <h2 id="r-title" class="display"></h2>
+    <dl id="r-detail" class="detail"></dl>
+    <button id="r-next" class="btn" type="button">繼續掃下一題</button>
+  </section>
+
+</main>
+
+<p id="toast" class="toast" role="alert" hidden></p>
+
+<canvas id="frame" hidden></canvas>
+<script src="/static/jsQR.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
