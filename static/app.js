@@ -1,6 +1,14 @@
 "use strict";
 
-/* 校園尋寶前端。單頁：登入 / 掃描 / 題目 / 結果 四個狀態共用同一份相機串流。 */
+/* 校園尋寶前端。
+ *
+ * 畫面完全由伺服器的 /api/state 決定：每秒拉一次，拿到什麼就畫什麼。
+ * 前端自己只留三個東西 —— token、device id、平手時隊輔點的那個選項。
+ *
+ * 角色：
+ *   leader  掃題目開局、看各選項票數、決定送出。相機只在等待時開著。
+ *   member  只掃一次登入 QR，之後相機永久關閉，等隊輔開題目再投票。
+ */
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,42 +18,27 @@ const el = {
   scanner: $("scanner"), video: $("video"), camSwitch: $("cam-switch"), camLabel: $("cam-label"),
   scanToggle: $("scan-toggle"),
   form: $("entry-form"), input: $("entry-input"), submit: $("entry-submit"),
+  wait: $("panel-wait"), waitTitle: $("wait-title"),
   qPanel: $("panel-question"), qMeta: $("q-meta"), qContent: $("q-content"),
   qFigure: $("q-figure"), qImage: $("q-image"), qChoices: $("q-choices"),
-  qSubmit: $("q-submit"), qBack: $("q-back"),
+  qTally: $("q-tally"), qSubmit: $("q-submit"), qCancel: $("q-cancel"),
   rPanel: $("panel-result"), rTitle: $("r-title"),
-  rDetail: $("r-detail"), rNext: $("r-next"),
+  rDetail: $("r-detail"), rVotes: $("r-votes"), rNext: $("r-next"),
   toast: $("toast"), canvas: $("frame"),
 };
 
 const ID_RE = /^[A-Z]{5}$/;
 const SCAN_INTERVAL = 100;   // ms，約 10fps
 const SCAN_MAX_EDGE = 640;   // 解碼前先降採樣，避免主執行緒卡頓
-const POLL_INTERVAL = 5000;
 const RESCAN_MISSES = 8;     // 同一組代碼要離開鏡頭這麼多幀才會再次觸發
+const POLL_INTERVAL = 1000;
 const TOAST_MS = 3200;
 const KEY_TOKEN = "treasure.token";
+const KEY_DEVICE = "treasure.device";
 const KEY_CAMERA = "treasure.camera";
 const CHOICE_KEYS = "ABCDEFGHIJ";
 
 const ctx = el.canvas.getContext("2d", { willReadFrequently: true });
-
-let token = null;
-let team = null;
-let mode = "login";          // login | scan | question | result
-let question = null;
-let choice = null;
-let busy = false;
-
-let stream = null;
-let cameras = [];
-let cameraIndex = 0;
-let rafId = 0;
-let lastFrame = 0;
-let lastCode = "";
-let misses = 0;
-let pollId = 0;
-let toastId = 0;
 
 const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
 const store = {
@@ -54,10 +47,36 @@ const store = {
   drop(key) { try { localStorage.removeItem(key); } catch { /* 無痕模式 */ } },
 };
 
+let token = store.get(KEY_TOKEN);
+let device = store.get(KEY_DEVICE);
+if (!device) {
+  device = (crypto.randomUUID?.() || String(Math.random()).slice(2) + Date.now().toString(36));
+  store.set(KEY_DEVICE, device);
+}
+
+let state = null;
+let pick = null;             // 平手時隊輔點的選項，只活在這台手機上
+let rendered = "";           // 目前畫面的身分，變了才重建 DOM
+let busy = false;
+
+let stream = null;
+let cameras = [];
+let cameraIndex = 0;
+let cameraGranted = false;   // 成功開過一次，之後每局自動接回來
+let rafId = 0;
+let lastFrame = 0;
+let lastCode = "";
+let misses = 0;
+let pollId = 0;
+let toastId = 0;
+
+const role = () => state?.role;
+const phase = () => state?.phase ?? "idle";
+
 // ---------------------------------------------------------------- API
 
 async function api(path, options = {}) {
-  const headers = {};
+  const headers = { "X-Device": device };
   if (token) headers["X-Token"] = token;
   if (options.body) headers["Content-Type"] = "application/json";
 
@@ -77,9 +96,21 @@ async function api(path, options = {}) {
   return data;
 }
 
-function onApiError(err) {
-  if (err.status === 401) logout();
-  else toast(err.message);
+const post = (path, body) =>
+  api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+/** 包住一次使用者動作：期間停掉輪詢與掃描，結束後把回傳的 state 畫上去。 */
+async function act(run) {
+  if (busy) return;
+  busy = true;
+  try {
+    apply(await run());
+  } catch (err) {
+    if (err.status === 401) logout();
+    else toast(err.message);
+  } finally {
+    busy = false;
+  }
 }
 
 // ---------------------------------------------------------------- 畫面
@@ -92,13 +123,13 @@ function toast(message) {
   toastId = setTimeout(() => { el.toast.hidden = true; }, TOAST_MS);
 }
 
-function renderBar(state) {
+function renderBar(next) {
   el.bar.hidden = false;
-  el.scores.hidden = !state.show_scores;
-  if (state.show_scores) {
-    el.scores.replaceChildren(...state.scores.map((value, i) => {
+  el.scores.hidden = !next.show_scores;
+  if (next.show_scores) {
+    el.scores.replaceChildren(...next.scores.map((value, i) => {
       const li = document.createElement("li");
-      if (i + 1 === team) li.className = "me";
+      if (i + 1 === next.team) li.className = "me";
       const no = document.createElement("span");
       no.className = "no";
       no.textContent = i + 1;
@@ -109,50 +140,204 @@ function renderBar(state) {
       return li;
     }));
   }
-  el.progress.textContent = `解題數 ${state.answered}/${state.total} · 共 ${fmt(state.score)} 分`;
+  el.progress.textContent = `解題數 ${next.answered}/${next.total} · 共 ${fmt(next.score)} 分`;
 }
 
-function setMode(next) {
-  mode = next;
-  const onStage = next === "login" || next === "scan";
-  el.stage.hidden = !onStage;
-  el.qPanel.hidden = next !== "question";
-  el.rPanel.hidden = next !== "result";
+/** 伺服器說什麼就畫什麼。fresh 表示題目或階段換了，要重建 DOM。 */
+function apply(next) {
+  state = next;
+  renderBar(next);
 
-  if (next === "login") {
-    el.title.textContent = "校園尋寶";
-    el.hint.textContent = "掃描隊伍 QR-Code 登入";
-    el.input.className = "field";
-    el.input.placeholder = "輸入登入 Token";
-    el.input.maxLength = 64;
-    el.input.setAttribute("autocapitalize", "off");
-    el.submit.textContent = "登入";
-    el.scanToggle.textContent = "掃描 QR-Code 登入";
-    el.input.value = "";
-  } else if (next === "scan") {
-    el.title.textContent = `第 ${team} 隊`;
-    el.hint.textContent = "掃描題目 QR-Code";
-    el.input.className = "field code";
-    el.input.placeholder = "ABCDE";
-    el.input.maxLength = 5;
-    el.input.setAttribute("autocapitalize", "characters");
-    el.submit.textContent = "送出";
-    el.scanToggle.textContent = "開啟相機";
-    el.input.value = "";
+  const key = `${next.role}:${next.phase}:${next.question?.id ?? ""}`;
+  const fresh = key !== rendered;
+  rendered = key;
+  if (fresh) pick = null;
+
+  el.stage.hidden = !(next.phase === "idle" && next.role === "leader");
+  el.wait.hidden = !(next.phase === "idle" && next.role === "member");
+  el.qPanel.hidden = next.phase !== "voting";
+  el.rPanel.hidden = next.phase !== "revealed";
+
+  if (next.phase === "idle") renderIdle(next);
+  else if (next.phase === "voting") renderVoting(next, fresh);
+  else renderResult(next, fresh);
+
+  setCamera(next.phase === "idle" && next.role === "leader");
+}
+
+function renderIdle(next) {
+  if (next.role === "member") {
+    el.waitTitle.textContent = `第 ${next.team} 隊 · 等待題目中`;
+    return;
+  }
+  el.title.textContent = `第 ${next.team} 隊`;
+  el.hint.textContent = `掃描題目 QR-Code · 隊員在線 ${next.online} 人`;
+  el.input.className = "field code";
+  el.input.placeholder = "ABCDE";
+  el.input.maxLength = 5;
+  el.input.setAttribute("autocapitalize", "characters");
+  el.submit.textContent = "開始";
+  el.scanToggle.textContent = "開啟相機";
+}
+
+function renderLogin() {
+  el.bar.hidden = true;
+  el.stage.hidden = false;
+  el.wait.hidden = el.qPanel.hidden = el.rPanel.hidden = true;
+  el.title.textContent = "校園尋寶";
+  el.hint.textContent = "掃描隊伍 QR-Code 登入";
+  el.input.className = "field";
+  el.input.placeholder = "輸入登入 Token";
+  el.input.maxLength = 64;
+  el.input.setAttribute("autocapitalize", "off");
+  el.input.value = "";
+  el.submit.textContent = "登入";
+  el.scanToggle.textContent = "掃描 QR-Code 登入";
+  setCamera(true);
+}
+
+// ---------------------------------------------------------------- 投票中
+
+function renderVoting(next, fresh) {
+  const q = next.question;
+  const leader = next.role === "leader";
+
+  if (fresh) {
+    el.qMeta.textContent = `${q.id} · ${fmt(q.points)} 分`;
+    el.qContent.textContent = q.content;
+    el.qFigure.hidden = !q.image;
+    if (q.image) {
+      el.qImage.src = q.image;
+      el.qImage.alt = q.content;
+    }
+    el.qChoices.replaceChildren(...q.choices.map((text, i) => buildChoice(text, i, leader)));
+    el.qSubmit.hidden = !leader;
+    el.qCancel.hidden = !leader;
   }
 
-  syncScanner();
-  if (onStage) resumeScanning();
+  const tie = next.tie ?? [];
+  for (const button of el.qChoices.children) {
+    const text = button.dataset.choice;
+    const chosen = leader ? pick === text : next.my_choice === text;
+    button.setAttribute("aria-checked", String(chosen));
+    if (leader) {
+      // 隊輔平常不能點選項，只有平手時才用來指定送哪一個
+      button.disabled = !tie.includes(text);
+      button.classList.toggle("tiebreak", tie.includes(text));   // 平手時才看得出來能點
+      button.querySelector(".choice-count").textContent = next.counts[text] ?? 0;
+    }
+  }
+
+  el.qTally.textContent = `已投 ${next.voted}/${next.online} 人`
+    + (leader ? "" : " · 等候隊輔送出…");
+  if (leader) updateSubmit(next, tie);
 }
 
-function syncScanner() {
-  const live = Boolean(stream);
-  el.scanner.hidden = !live;
-  el.scanToggle.hidden = live;
-  el.camSwitch.hidden = cameras.length < 2;
+function buildChoice(text, index, leader) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "choice";
+  button.dataset.key = CHOICE_KEYS[index];
+  button.dataset.choice = text;
+  button.setAttribute("role", "radio");
+  button.setAttribute("aria-checked", "false");
+
+  const label = document.createElement("span");
+  label.className = "choice-text";
+  label.textContent = text;
+  button.append(label);
+
+  if (leader) {
+    const count = document.createElement("span");
+    count.className = "choice-count";
+    count.textContent = "0";
+    button.append(count);
+  }
+  button.addEventListener("click", () => onChoice(text, leader));
+  return button;
+}
+
+function updateSubmit(next, tie) {
+  if (!next.voted) {
+    el.qSubmit.textContent = "還沒有人投票";
+    el.qSubmit.disabled = true;
+  } else if (tie.length > 1 && !pick) {
+    el.qSubmit.textContent = `${tie.join(" · ")} 同票，點一個要送的`;
+    el.qSubmit.disabled = true;
+  } else {
+    const winner = tie.length > 1 ? pick : topChoice(next);
+    el.qSubmit.textContent = `送出「${winner}」`;
+    el.qSubmit.disabled = false;
+  }
+}
+
+function topChoice(next) {
+  return Object.keys(next.counts).reduce((best, key) =>
+    next.counts[key] > next.counts[best] ? key : best);
+}
+
+function onChoice(text, leader) {
+  if (leader) {
+    if (!(state.tie ?? []).includes(text)) return;
+    pick = text;
+    renderVoting(state, false);
+    return;
+  }
+  act(() => post("/api/vote", { choice: text }));
+}
+
+// ---------------------------------------------------------------- 結果
+
+function renderResult(next, fresh) {
+  if (!fresh) return;
+  const result = next.result;
+  el.rPanel.classList.toggle("correct", result.correct);
+  el.rPanel.classList.toggle("wrong", !result.correct);
+  el.rTitle.textContent = result.correct ? "答對了！" : "答錯了";
+
+  const rows = [["送出的答案", result.choice]];
+  if (!result.correct) rows.push(["正解", result.answer]);
+  rows.push(["本題得分", `${fmt(result.earned)} 分`]);
+  el.rDetail.replaceChildren(...rows.flatMap(([label, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    return [dt, dd];
+  }));
+
+  const votes = Object.entries(result.votes ?? {}).sort((a, b) => b[1] - a[1]);
+  el.rVotes.replaceChildren(...votes.map(([text, count]) => {
+    const li = document.createElement("li");
+    if (text === result.answer) li.className = "right";
+    const name = document.createElement("span");
+    name.textContent = text;
+    const bar = document.createElement("span");
+    bar.className = "bars";
+    bar.textContent = `${count} 票`;
+    li.append(name, bar);
+    return li;
+  }));
+
+  el.rNext.hidden = next.role !== "leader";
 }
 
 // ---------------------------------------------------------------- 相機
+
+function setCamera(on) {
+  if (on) {
+    // 上一局結束時相機被關掉了，權限拿過就直接接回來，不用隊輔每題手動按一次
+    if (!stream && cameraGranted) { openCamera(); return; }
+    el.scanner.hidden = !stream;
+    el.scanToggle.hidden = Boolean(stream);
+    el.camSwitch.hidden = cameras.length < 2;
+    resumeScanning();
+  } else if (stream) {
+    stopCamera();
+    el.scanner.hidden = true;
+    el.scanToggle.hidden = false;
+  }
+}
 
 async function startCamera(preferredId) {
   stopCamera();
@@ -172,16 +357,17 @@ async function startCamera(preferredId) {
   }
   if (!stream) throw lastError || new Error("no camera");
 
+  cameraGranted = true;
   el.video.srcObject = stream;
   await el.video.play().catch(() => { /* iOS 偶爾拒絕自動播放 */ });
   await refreshCameraList();
-  syncScanner();
-  resumeScanning();
+  setCamera(true);
 }
 
 function stopCamera() {
   if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  lastCode = "";
 }
 
 async function refreshCameraList() {
@@ -222,6 +408,10 @@ function cameraMessage(err) {
 
 // ---------------------------------------------------------------- 掃描
 
+function scanning() {
+  return Boolean(stream) && (!state || (state.phase === "idle" && state.role === "leader"));
+}
+
 function resumeScanning() {
   if (!stream) return;
   el.video.play().catch(() => { /* 面板切換後 iOS 可能暫停 */ });
@@ -230,7 +420,7 @@ function resumeScanning() {
 
 function tick(now) {
   rafId = requestAnimationFrame(tick);
-  if (busy || (mode !== "login" && mode !== "scan")) return;
+  if (busy || !scanning()) return;
   if (now - lastFrame < SCAN_INTERVAL) return;
   lastFrame = now;
 
@@ -259,10 +449,10 @@ function tick(now) {
 
 function onScan(text) {
   if (busy) return;
-  if (mode === "login") { login(parseToken(text)); return; }
+  if (!token) { login(parseToken(text)); return; }
   const id = text.toUpperCase();
   if (!ID_RE.test(id)) { toast("這不是題目 QR-Code"); return; }
-  openQuestion(id);
+  act(() => post("/api/scan", { id }));
 }
 
 function parseToken(text) {
@@ -273,20 +463,17 @@ function parseToken(text) {
   return text.trim();
 }
 
-// ---------------------------------------------------------------- 流程
+// ---------------------------------------------------------------- 登入
 
 async function login(value) {
   if (!value || busy) return;
   busy = true;
   try {
-    const state = await api("/api/login", { method: "POST", body: JSON.stringify({ token: value }) });
+    const next = await api("/api/login", { method: "POST", body: JSON.stringify({ token: value }) });
     token = value;
-    team = state.team;
     store.set(KEY_TOKEN, value);
-    renderBar(state);
-    setMode("scan");
+    apply(next);
     startPolling();
-    if (!stream) openCamera();
   } catch (err) {
     // 存著的 token 已經失效就丟掉，否則每次重整都會再失敗一次
     if (err.status === 401) store.drop(KEY_TOKEN);
@@ -299,107 +486,11 @@ async function login(value) {
 function logout() {
   clearInterval(pollId);
   token = null;
-  team = null;
+  state = null;
+  rendered = "";
   store.drop(KEY_TOKEN);
-  el.bar.hidden = true;
-  setMode("login");
+  renderLogin();
   toast("登入失效，請重新登入");
-}
-
-async function openQuestion(id) {
-  if (busy) return;
-  busy = true;
-  let reopened = false;
-  try {
-    const data = await api(`/api/question/${id}`);
-    if (data.answered) {
-      showResult(data, true);
-      reopened = true;
-    } else {
-      question = data;
-      choice = null;
-      renderQuestion(data);
-      setMode("question");
-    }
-  } catch (err) {
-    // 不清掉的話，再多打一個字會被 slice 回同一組壞代碼、又送一次
-    el.input.value = "";
-    onApiError(err);
-  } finally {
-    busy = false;
-  }
-  // 題目 payload 不含分數，所以隊友剛加的分要另外拉一次（refreshState 需要 busy 已清掉）
-  if (reopened) refreshState();
-}
-
-function renderQuestion(data) {
-  el.qMeta.textContent = `${data.id} · ${fmt(data.points)} 分`;
-  el.qContent.textContent = data.content;
-  el.qFigure.hidden = !data.image;
-  if (data.image) {
-    el.qImage.src = data.image;
-    el.qImage.alt = data.content;
-  }
-  el.qSubmit.disabled = true;
-  el.qChoices.replaceChildren(...data.choices.map((text, i) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "choice";
-    button.dataset.key = CHOICE_KEYS[i];
-    button.setAttribute("role", "radio");
-    button.setAttribute("aria-checked", "false");
-    button.textContent = text;
-    button.addEventListener("click", () => selectChoice(button, text));
-    return button;
-  }));
-}
-
-function selectChoice(button, text) {
-  choice = text;
-  for (const other of el.qChoices.children) {
-    other.setAttribute("aria-checked", String(other === button));
-  }
-  el.qSubmit.disabled = false;
-}
-
-async function submitAnswer() {
-  if (!question || !choice || busy) return;
-  busy = true;
-  el.qSubmit.disabled = true;
-  try {
-    const result = await api("/api/answer", {
-      method: "POST",
-      body: JSON.stringify({ id: question.id, choice }),
-    });
-    renderBar(result);
-    showResult(result, result.already);
-  } catch (err) {
-    onApiError(err);
-    el.qSubmit.disabled = false;
-  } finally {
-    busy = false;
-  }
-}
-
-function showResult(result, already) {
-  el.rPanel.classList.toggle("correct", result.correct);
-  el.rPanel.classList.toggle("wrong", !result.correct);
-  el.rTitle.textContent = already
-    ? (result.correct ? "隊友已經答對了" : "隊友已經答過了")
-    : (result.correct ? "答對了！" : "答錯了");
-
-  const rows = [["你們選了", result.choice]];
-  if (!result.correct) rows.push(["正解", result.answer]);
-  rows.push(["本題得分", `${fmt(result.earned)} 分`]);
-
-  el.rDetail.replaceChildren(...rows.flatMap(([label, value]) => {
-    const dt = document.createElement("dt");
-    dt.textContent = label;
-    const dd = document.createElement("dd");
-    dd.textContent = value;
-    return [dt, dd];
-  }));
-  setMode("result");
 }
 
 // ---------------------------------------------------------------- 輪詢
@@ -412,7 +503,7 @@ function startPolling() {
 async function refreshState() {
   if (!token || busy || document.hidden) return;
   try {
-    renderBar(await api("/api/state"));
+    apply(await api("/api/state"));
   } catch (err) {
     if (err.status === 401) logout();
   }
@@ -425,22 +516,28 @@ el.form.addEventListener("submit", (event) => {
   const value = el.input.value.trim();
   if (!value) return;
   el.input.blur();
-  if (mode === "login") login(parseToken(value));
-  else onScan(value);
+  el.input.value = "";
+  if (!token) login(parseToken(value));
+  else if (ID_RE.test(value.toUpperCase())) act(() => post("/api/scan", { id: value.toUpperCase() }));
+  else toast("題目代碼是五碼大寫英文字母");
 });
 
 el.input.addEventListener("input", () => {
-  if (mode !== "scan") return;
+  if (!token) return;
   const cleaned = el.input.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 5);
   if (cleaned !== el.input.value) el.input.value = cleaned;
-  if (cleaned.length === 5) { el.input.blur(); openQuestion(cleaned); }
+  if (cleaned.length === 5) {
+    el.input.blur();
+    el.input.value = "";
+    act(() => post("/api/scan", { id: cleaned }));
+  }
 });
 
 el.scanToggle.addEventListener("click", openCamera);
 el.camSwitch.addEventListener("click", cycleCamera);
-el.qSubmit.addEventListener("click", submitAnswer);
-el.qBack.addEventListener("click", () => setMode("scan"));
-el.rNext.addEventListener("click", () => setMode("scan"));
+el.qSubmit.addEventListener("click", () => act(() => post("/api/submit", pick ? { choice: pick } : {})));
+el.qCancel.addEventListener("click", () => act(() => post("/api/close")));
+el.rNext.addEventListener("click", () => act(() => post("/api/close")));
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
@@ -450,13 +547,12 @@ document.addEventListener("visibilitychange", () => {
 
 // ---------------------------------------------------------------- 啟動
 
-setMode("login");
+renderLogin();
 
 const urlToken = new URLSearchParams(location.search).get("token");
 if (urlToken) {
   history.replaceState(null, "", location.pathname);  // 別把 token 留在網址列
   login(urlToken.trim());
-} else {
-  const saved = store.get(KEY_TOKEN);
-  if (saved) login(saved);
+} else if (token) {
+  login(token);
 }

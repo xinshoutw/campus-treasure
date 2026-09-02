@@ -17,8 +17,8 @@
 
 <main class="wrap">
 
-  <!-- 登入與掃描共用同一個舞台，中間的相機區塊全程不重建 -->
-  <section id="stage" class="stage">
+  <!-- 登入（兩種角色）與隊輔掃題目共用同一個舞台 -->
+  <section id="stage" class="stage" hidden>
     <div class="stage-head">
       <h1 id="stage-title" class="display">校園尋寶</h1>
       <p id="stage-hint" class="hint">掃描隊伍 QR-Code 登入</p>
@@ -33,32 +33,40 @@
       <p id="cam-label" class="cam-label" aria-live="polite"></p>
     </div>
 
-    <button id="scan-toggle" class="ghost" type="button">掃描登入</button>
+    <button id="scan-toggle" class="ghost" type="button">掃描 QR-Code 登入</button>
 
     <form id="entry-form" class="entry" autocomplete="off">
       <input id="entry-input" class="field" type="text" spellcheck="false"
              autocomplete="off" autocorrect="off" enterkeyhint="go">
       <button id="entry-submit" class="btn" type="submit">登入</button>
     </form>
-
   </section>
 
-  <!-- 題目 -->
+  <!-- 隊員等待隊輔掃題目 -->
+  <section id="panel-wait" class="panel wait" hidden>
+    <p class="wait-mark" aria-hidden="true"></p>
+    <h2 id="wait-title" class="display">等待題目中</h2>
+    <p class="hint">隊輔掃描題目後，題目會出現在這裡</p>
+  </section>
+
+  <!-- 投票中（兩種角色共用，內容依角色而異） -->
   <section id="panel-question" class="panel" hidden>
     <p id="q-meta" class="meta"></p>
     <h2 id="q-content" class="display question"></h2>
     <figure id="q-figure" class="figure" hidden><img id="q-image" alt=""></figure>
     <div id="q-choices" class="choices" role="radiogroup" aria-label="選項"></div>
-    <button id="q-submit" class="btn" type="button" disabled>送出</button>
-    <button id="q-back" class="ghost" type="button">取消</button>
+    <p id="q-tally" class="tally" aria-live="polite"></p>
+    <button id="q-submit" class="btn" type="button" hidden disabled></button>
+    <button id="q-cancel" class="ghost" type="button" hidden>取消這一題</button>
   </section>
 
-  <!-- 結果 -->
+  <!-- 公開結果 -->
   <section id="panel-result" class="panel result" hidden>
     <p id="r-mark" class="mark" aria-hidden="true"></p>
     <h2 id="r-title" class="display"></h2>
     <dl id="r-detail" class="detail"></dl>
-    <button id="r-next" class="btn" type="button">下一題</button>
+    <ol id="r-votes" class="votes"></ol>
+    <button id="r-next" class="btn" type="button" hidden>下一題</button>
   </section>
 
 </main>

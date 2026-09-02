@@ -344,6 +344,77 @@ body::before {
 
 #q-submit { width: 100%; }
 
+/* 隊輔平常只是在看票數，選項不是按鈕；平手時才變成可點 */
+.choice:disabled { cursor: default; opacity: 1; }
+.choice.tiebreak { border-style: dashed; border-color: var(--accent); cursor: pointer; }
+.choice-text { flex: 1; min-width: 0; }
+.choice-count {
+  flex: none;
+  min-width: 2.2ch;
+  text-align: right;
+  font: 700 1.3rem/1 var(--font-body);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.tally {
+  margin: 0 0 1rem;
+  text-align: center;
+  font-size: .88rem;
+  letter-spacing: .02em;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 隊員等待 ---------- */
+
+.wait { text-align: center; padding-top: 3rem; }
+.wait .display { font-size: var(--text-hero); }
+.wait .hint { margin-top: .6rem; }
+
+/* 三顆點慢慢呼吸，讓「還活著」看得出來 */
+.wait-mark {
+  width: 76px;
+  height: 12px;
+  margin: 0 auto 1.4rem;
+  background:
+    radial-gradient(circle 6px at 10px 6px, var(--accent) 98%, transparent),
+    radial-gradient(circle 6px at 38px 6px, var(--accent) 98%, transparent),
+    radial-gradient(circle 6px at 66px 6px, var(--accent) 98%, transparent);
+  opacity: .55;
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes breathe { 50% { opacity: 1; } }
+
+/* ---------- 結果的票數 ---------- */
+
+.votes {
+  display: grid;
+  gap: .3rem;
+  margin: 0 0 1.4rem;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.votes li {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .5rem .9rem;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  font-size: .95rem;
+}
+.votes li.right { border-color: var(--ok); }
+.votes .bars {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+.votes li.right .bars { color: var(--ok); }
+
 /* ---------- 結果 ---------- */
 
 .result { text-align: center; padding-top: 1.5rem; }
@@ -401,5 +472,5 @@ body::before {
 #r-next { width: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition-duration: .01ms !important; }
+  * { transition-duration: .01ms !important; animation: none !important; }
 }
