@@ -53,6 +53,9 @@ class Phone {
   constructor(name, base) {
     this.name = name;
     this.delay = 0;        // 人為的網路延遲，毫秒
+    this.inflight = 0;
+    this.maxInflight = 0;
+    this.sent = [];        // 送出去的每一個 path，用來抓多餘的請求
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
@@ -78,9 +81,19 @@ class Phone {
         },
       },
       jsQR: () => null,
-      fetch: (path, opts) => (this.delay
-        ? new Promise((r) => setTimeout(r, this.delay)).then(() => fetch(base + path, opts))
-        : fetch(base + path, opts)),
+      fetch: (path, opts) => {
+        this.sent.push(path);
+        this.inflight++;
+        this.maxInflight = Math.max(this.maxInflight, this.inflight);
+        const done = () => { this.inflight--; };
+        // 延遲加在回應之後：真實的慢下行是伺服器早就算完了，只是回應晚到。
+        // 加在請求之前會變成「伺服器晚點才算」，測不到過期回應的問題。
+        const late = (v, throwIt) => new Promise((r) => setTimeout(r, this.delay))
+          .then(() => { done(); if (throwIt) throw v; return v; });
+        return fetch(base + path, opts).then(
+          (r) => (this.delay ? late(r, false) : (done(), r)),
+          (e) => (this.delay ? late(e, true) : (done(), Promise.reject(e))));
+      },
       document: {
         getElementById: (id) => (this.els[id] ||= makeElement(id)),
         createElement: (tag) => makeElement(`<${tag}>`),
@@ -263,6 +276,64 @@ check("隊員投票、改票；隊輔即時看到票數，隊員看不到", asyn
   assert.equal(leader.counts()[A], "1");
   assert.equal(leader.counts()[B], "2");
   assert.match(leader.text("q-submit"), new RegExp(`送出「${B}」`));
+});
+
+check("RTT 期間的第二次點擊不會被丟掉", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+  const [first, second] = m1.choices();
+
+  m1.delay = 400;                       // 一趟來回 400ms
+  m1.tapChoiceNow(first);
+  await m1.wait(80);
+  m1.tapChoiceNow(second);              // 第一票還在飛的時候改主意
+  await m1.wait(80);
+  assert.deepEqual(m1.checked(), [second], "畫面要顯示第二次點的");
+
+  // 整段期間畫面都不可以閃回第一次點的那個
+  const seen = new Set();
+  const sampler = setInterval(() => seen.add(m1.checked().join(",")), 20);
+  m1.delay = 0;
+  await m1.wait(1200);                  // 等兩趟都收斂
+  clearInterval(sampler);
+  assert.deepEqual([...seen], [second], `畫面中途閃過：${[...seen].join(" → ")}`);
+  assert.deepEqual(m1.checked(), [second], "畫面不可以無聲倒回第一次點的");
+  await leader.poll();
+  assert.equal(leader.counts()[second], "1", "伺服器要記到第二次點的");
+  assert.equal(leader.counts()[first], "0");
+});
+
+check("重複點同一個選項不會送出多餘的請求", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+  const [only] = m1.choices();
+
+  m1.delay = 400;
+  m1.sent = [];
+  m1.tapChoiceNow(only);
+  await m1.wait(80);
+  m1.tapChoiceNow(only);                // 同一個選項連點兩下
+  m1.delay = 0;
+  await m1.wait(1200);
+  const votes = m1.sent.filter((p) => p === "/api/vote");
+  assert.equal(votes.length, 1, `送了 ${votes.length} 次投票請求，應該只有 1 次`);
+});
+
+check("回應比輪詢週期慢時，輪詢不會堆疊", async () => {
+  const m1 = new Phone("M1", BASE);
+  await m1.login(MEMBER);
+  m1.maxInflight = 0;
+  m1.delay = 1500;                      // 比 POLL_INTERVAL 還久
+  await m1.wait(4000);
+  assert.equal(m1.maxInflight, 1, `同時在飛 ${m1.maxInflight} 個請求，應該只有 1 個`);
 });
 
 check("隊員點選項立刻反白，不等伺服器回應", async () => {

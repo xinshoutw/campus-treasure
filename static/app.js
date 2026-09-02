@@ -59,6 +59,8 @@ let pick = null;             // 平手時隊輔點的選項，只活在這台手
 let rendered = "";           // 目前畫面的身分，變了才重建 DOM
 let tallied = "";            // 票數的指紋，變了就取消隊輔已點的選項
 let busy = false;
+let polling = false;         // 同時只允許一次輪詢在飛
+let pendingVote = null;      // 上一票還在飛時又點的那個選項
 
 let stream = null;
 let cameras = [];
@@ -303,10 +305,36 @@ function onChoice(text, leader) {
   }
   // 先反白再送：不要讓使用者為了一趟網路來回而懷疑自己沒點到
   optimistic({ my_choice: text, voted: state.voted + (state.my_choice ? 0 : 1) });
-  act(() => post("/api/vote", { choice: text }));
+  castVote(text);
 }
 
 // ---------------------------------------------------------------- 結果
+
+/** 送出這一票。上一票還在飛的話記住最後一次，等它回來再補送。
+ *
+ * 直接丟掉會讓「最後一次點的算數」在有 RTT 的網路上變成假的：使用者看到自己
+ * 改了，伺服器卻收到第一次那票，畫面過幾百毫秒又無聲倒回去。 */
+function castVote(text) {
+  if (busy) { pendingVote = text; return; }
+  sendVote(text);
+}
+
+async function sendVote(text) {
+  busy = true;
+  try {
+    const next = await post("/api/vote", { choice: text });
+    if (pendingVote === null) apply(next);   // 期間又點了，別把舊的畫回去
+  } catch (err) {
+    if (err.status === 401) logout();
+    else toast(err.message);
+  } finally {
+    busy = false;
+  }
+  const queued = pendingVote;
+  pendingVote = null;
+  if (queued !== null && queued !== text) sendVote(queued);
+}
+
 
 function renderResult(next, fresh) {
   if (!fresh) return;
@@ -527,11 +555,16 @@ function startPolling() {
 }
 
 async function refreshState() {
-  if (!token || busy || document.hidden) return;
+  if (!token || busy || polling || document.hidden) return;
+  polling = true;
   try {
-    apply(await api("/api/state"));
+    const next = await api("/api/state");
+    // 這趟飛的時候使用者動了手，那份狀態比較新，別用舊的蓋掉
+    if (!busy) apply(next);
   } catch (err) {
     if (err.status === 401) logout();
+  } finally {
+    polling = false;
   }
 }
 
