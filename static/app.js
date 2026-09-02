@@ -221,7 +221,8 @@ function renderVoting(next, fresh) {
   const leader = next.role === "leader";
 
   if (fresh) {
-    el.qMeta.textContent = `${q.id} · ${fmt(q.points)} 分`;
+    // 隊員看不到題目代碼：貼紙是隊輔在掃的，代碼對隊員沒有用途
+    el.qMeta.textContent = leader ? `${q.id} · ${fmt(q.points)} 分` : `${fmt(q.points)} 分`;
     el.qContent.textContent = q.content;
     el.qFigure.hidden = !q.image;
     if (q.image) {

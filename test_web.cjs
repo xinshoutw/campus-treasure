@@ -224,6 +224,19 @@ check("隊輔開題目，隊員手機上自動出現同一題", async () => {
   assert.deepEqual(m1.choices().sort(), leader.choices().sort(), "兩邊選項要一樣");
 });
 
+check("隊員畫面不顯示題目代碼，只顯示分數", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+
+  assert.doesNotMatch(m1.text("q-meta"), new RegExp(QID), "隊員不可以看到題目代碼");
+  assert.match(m1.text("q-meta"), /\d+ 分/, "隊員要看得到分數");
+  assert.match(leader.text("q-meta"), new RegExp(QID), "隊輔要看得到代碼，才對得上貼紙");
+});
+
 check("隊員投票、改票；隊輔即時看到票數，隊員看不到", async () => {
   const leader = new Phone("L", BASE);
   const [m1, m2, m3] = ["M1", "M2", "M3"].map((n) => new Phone(n, BASE));
@@ -260,14 +273,17 @@ check("隊員點選項立刻反白，不等伺服器回應", async () => {
   await leader.type(QID);
   await m1.poll();
 
-  m1.delay = 500;                       // 回應要 0.5 秒才會回來
+  m1.delay = 1500;                      // 比 1 秒的輪詢週期還久：中途會有一次輪詢
   m1.tapChoiceNow(A);
   await m1.wait(60);                    // 遠早於回應
   assert.deepEqual(m1.checked(), [A], "點下去就要反白");
   assert.match(m1.text("q-tally"), /已投 1\//, "已投人數也要立刻跳");
 
+  await m1.wait(1000);                  // 跨過一次輪詢
+  assert.deepEqual(m1.checked(), [A], "中途的輪詢不可以把樂觀更新蓋回去");
+
   m1.delay = 0;
-  await m1.wait(600);                   // 等回應收斂
+  await m1.wait(1000);                  // 等回應收斂
   assert.deepEqual(m1.checked(), [A], "伺服器回來後結果一致");
   await leader.poll();
   assert.equal(leader.counts()[A], "1");
@@ -284,13 +300,15 @@ check("隊輔按下一題立刻回到等待，不等伺服器回應", async () =
   await leader.poll();
   await leader.click("q-submit");
 
-  leader.delay = 500;
+  leader.delay = 1500;
   leader.clickNow("r-next");
   await leader.wait(60);
   assert.equal(leader.screen(), "stage", "按下去就要回到掃描畫面");
+  await leader.wait(1000);
+  assert.equal(leader.screen(), "stage", "中途的輪詢不可以把畫面拉回結果頁");
 
   leader.delay = 0;
-  await leader.wait(600);
+  await leader.wait(1000);
   assert.equal(leader.screen(), "stage");
 });
 
@@ -299,13 +317,15 @@ check("隊輔按取消立刻回到等待，不等伺服器回應", async () => {
   await leader.login(LEADER);
   await leader.type(QID);
 
-  leader.delay = 500;
+  leader.delay = 1500;
   leader.clickNow("q-cancel");
   await leader.wait(60);
   assert.equal(leader.screen(), "stage");
+  await leader.wait(1000);
+  assert.equal(leader.screen(), "stage", "中途的輪詢不可以把畫面拉回題目");
 
   leader.delay = 0;
-  await leader.wait(600);
+  await leader.wait(1000);
   assert.equal(leader.screen(), "stage");
 });
 
