@@ -42,10 +42,35 @@ const CHOICE_KEYS = "ABCDEFGHIJ";
 const ctx = el.canvas.getContext("2d", { willReadFrequently: true });
 
 const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+// 無痕模式下 localStorage 可能整個不能寫。device id 掉了的話，同一個人
+// 重新整理就變成另一台裝置，票會被算成兩票 —— 所以退到 sessionStorage，
+// 它在同一個分頁裡撐得過重新整理。
+const backends = [
+  () => localStorage,
+  () => sessionStorage,
+];
+
 const store = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key, value) { try { localStorage.setItem(key, value); } catch { /* 無痕模式 */ } },
-  drop(key) { try { localStorage.removeItem(key); } catch { /* 無痕模式 */ } },
+  get(key) {
+    for (const at of backends) {
+      try {
+        const value = at().getItem(key);
+        if (value !== null) return value;
+      } catch { /* 這層不能用，換下一層 */ }
+    }
+    return null;
+  },
+  set(key, value) {
+    for (const at of backends) {
+      try { at().setItem(key, value); return true; } catch { /* 換下一層 */ }
+    }
+    return false;
+  },
+  drop(key) {
+    for (const at of backends) {
+      try { at().removeItem(key); } catch { /* 沒這層就算了 */ }
+    }
+  },
 };
 
 let token = store.get(KEY_TOKEN);

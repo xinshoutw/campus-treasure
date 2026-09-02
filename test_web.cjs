@@ -70,7 +70,11 @@ class Phone {
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
-    const store = new Map(Object.entries(seed || {}));
+    // __ 開頭的是給 harness 的設定，不是 storage 的內容
+    const opts = seed || {};
+    const store = new Map(Object.entries(opts).filter(([k]) => !k.startsWith("__")));
+    const session = (this.session = opts.__session || new Map());
+    this.privateMode = Boolean(opts.__private);   // 要在腳本跑起來之前就生效
     const sandbox = {
       console,
       setTimeout, clearTimeout, clearInterval,
@@ -86,9 +90,14 @@ class Phone {
       AbortSignal,
       crypto: { randomUUID: () => `${name}-device` },
       localStorage: {
-        getItem: (k) => (store.has(k) ? store.get(k) : null),
-        setItem: (k, v) => store.set(k, String(v)),
+        getItem: (k) => (this.privateMode ? null : (store.has(k) ? store.get(k) : null)),
+        setItem: (k, v) => { if (this.privateMode) throw new Error("QuotaExceeded"); store.set(k, String(v)); },
         removeItem: (k) => store.delete(k),
+      },
+      sessionStorage: {
+        getItem: (k) => (session.has(k) ? session.get(k) : null),
+        setItem: (k, v) => session.set(k, String(v)),
+        removeItem: (k) => session.delete(k),
       },
       location: { search: "", pathname: "/" },
       history: { replaceState() {} },
@@ -244,6 +253,30 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("無痕模式下重新整理不會變成另一個人", async () => {
+  const leader = new Phone("L", BASE);
+  await leader.login(LEADER);
+  await leader.type(QID);
+
+  const session = new Map();             // 同一個分頁的 sessionStorage
+  const first = new Phone("M1", BASE, { __session: session, __private: true });
+  await first.login(MEMBER);
+  await first.poll();
+  await first.tapChoice(A);
+  first.close();
+
+  const reloaded = new Phone("M1b", BASE, { __session: session, __private: true });  // 重新整理
+  await reloaded.login(MEMBER);
+  await reloaded.poll();
+  await reloaded.tapChoice(B);           // 同一個人改投另一個
+
+  await leader.poll();
+  assert.equal(leader.text("q-tally").match(/已投 (\d+)/)[1], "1",
+    `一個人重新整理後變成 ${leader.text("q-tally")}`);
+  assert.equal(leader.counts()[A], "0");
+  assert.equal(leader.counts()[B], "1");
+});
 
 check("投票中不再空轉掃描迴圈", async () => {
   const leader = new Phone("L", BASE);
