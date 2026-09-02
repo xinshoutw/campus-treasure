@@ -48,10 +48,24 @@ PDF 上的標籤刻意只用 ASCII（`TEAM 1`、`ABCDE`），這樣不必嵌中�
 | `TEAM_KEY` | 各隊 token，`;` 分隔，**順序就是隊號** |
 | `RANDOM_CHOICES` | 每次拉題目是否打亂選項順序 |
 | `SHOW_SCORES_IN_MENU` | 最上方是否顯示各隊分數 |
+| `RESET_TOKEN` | 清空全場的權杖。**留空則 `/reset` 端點完全停用** |
 | `HOST` / `PORT` | 監聽位址 |
 | `SITE_URL` | `make_qr.py` 產生登入 QR 時用的網址 |
 
 `questions.yaml`：見檔案開頭的欄位說明。
+
+## 清空全場
+
+```bash
+curl -X POST https://treasure.ntust.org/reset -H "X-Reset-Token: $RESET_TOKEN"
+```
+
+清掉所有隊伍的分數與作答紀錄。**清掉之前會先把 `data.json` 改名成
+`data.<時間戳>.json` 留底**，所以誤觸還救得回來（把備份改名回 `data.json` 再重啟）。
+
+- 只收 `POST`，`GET` 回 405 —— 避免被瀏覽器預抓、聊天軟體的連結預覽或爬蟲誤觸
+- `RESET_TOKEN` 沒設就回 404，端點根本不存在
+- `RESET_TOKEN` 若和某隊的 token 相同，啟動時就會擋下來
 
 ## 活動當中
 

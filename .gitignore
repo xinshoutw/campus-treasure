@@ -6,6 +6,7 @@ __pycache__/
 .env
 data.json
 data.json.tmp
+data.*.json
 
 # 產生物
 static/cache/

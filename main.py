@@ -57,14 +57,17 @@ def _flag(name, default=True):
 def load_config():
     load_dotenv(BASE / ".env")
     tokens = [t.strip() for t in os.getenv("TEAM_KEY", "").split(";") if t.strip()]
+    reset_token = os.getenv("RESET_TOKEN", "").strip()
     errors = []
     if not tokens:
         errors.append(".env 缺少 TEAM_KEY（格式：TEAM_KEY=第1隊;第2隊;…）")
     if len(set(tokens)) != len(tokens):
         errors.append("TEAM_KEY 裡有重複的 token，隊伍會互相竄改分數")
+    if reset_token and reset_token in tokens:
+        errors.append("RESET_TOKEN 與某一隊的 token 相同，那隊隨手一掃就會清空全場")
     if errors:
         _die(errors, ".env 設定錯誤")
-    return tokens, _flag("RANDOM_CHOICES"), _flag("SHOW_SCORES_IN_MENU")
+    return tokens, reset_token, _flag("RANDOM_CHOICES"), _flag("SHOW_SCORES_IN_MENU")
 
 
 # --------------------------------------------------------------------------
@@ -237,6 +240,20 @@ def load_data():
     return data
 
 
+def _backup_data():
+    """呼叫者必須持有 _lock。把現有 data.json 挪成帶時間戳的備份，回傳檔名。"""
+    if not DATA_FILE.exists():
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = DATA_FILE.with_name(f"data.{stamp}.json")
+    collision = 0
+    while backup.exists():
+        collision += 1
+        backup = DATA_FILE.with_name(f"data.{stamp}-{collision}.json")
+    os.replace(DATA_FILE, backup)
+    return backup.name
+
+
 def _flush():
     """呼叫者必須持有 _lock。"""
     tmp = DATA_FILE.with_name(DATA_FILE.name + ".tmp")
@@ -277,11 +294,16 @@ def _state(team):
 app = Flask(__name__)
 
 
+def _token_matches(supplied, known):
+    # 用 bytes 比對：compare_digest 對含非 ASCII 的 str 會直接丟 TypeError
+    return secrets.compare_digest(supplied.encode("utf-8"), known.encode("utf-8"))
+
+
 def _team_from_token(token):
     if not token:
         return None
     for number, known in enumerate(TOKENS, 1):
-        if secrets.compare_digest(token, known):
+        if _token_matches(token, known):
             return number
     return None
 
@@ -385,9 +407,27 @@ def api_answer():
         )
 
 
+@app.post("/reset")
+def api_reset():
+    """清空所有隊伍的分數與作答紀錄。清掉之前會先把 data.json 備份起來。"""
+    if not RESET_TOKEN:
+        return jsonify(error="未設定 RESET_TOKEN，此端點停用"), 404
+    supplied = request.headers.get("X-Reset-Token", "").strip()
+    if not supplied or not _token_matches(supplied, RESET_TOKEN):
+        return jsonify(error="Reset Token 無效"), 401
+
+    with _lock:
+        cleared = sum(len(answers) for answers in _data["teams"].values())
+        backup = _backup_data()
+        _data["teams"] = {}
+        _flush()
+    print(f"[重置] 清空 {cleared} 筆作答紀錄" + (f"，已備份為 {backup}" if backup else ""))
+    return jsonify(ok=True, cleared=cleared, backup=backup)
+
+
 # --------------------------------------------------------------------------
 
-TOKENS, RANDOM_CHOICES, SHOW_SCORES = load_config()
+TOKENS, RESET_TOKEN, RANDOM_CHOICES, SHOW_SCORES = load_config()
 QUESTIONS = load_questions()
 
 if __name__ == "__main__":
@@ -398,7 +438,8 @@ if __name__ == "__main__":
     print(
         f"\n已載入 {len(QUESTIONS)} 題 · {len(TOKENS)} 隊 · "
         f"洗牌 {'開' if RANDOM_CHOICES else '關'} · "
-        f"分數列 {'開' if SHOW_SCORES else '關'}"
+        f"分數列 {'開' if SHOW_SCORES else '關'} · "
+        f"/reset {'開' if RESET_TOKEN else '關'}"
     )
     print(f"  http://{host}:{port}\n")
     serve(app, host=host, port=port, threads=8)
