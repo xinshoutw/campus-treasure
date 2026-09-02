@@ -171,6 +171,14 @@ const C = "企鵝";
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
 
+check("CSS 沒有蓋掉 hidden 屬性", async () => {
+  // DOM stub 只看 el.hidden，永遠抓不到這個 —— 這是靜態檢查
+  const css = fs.readFileSync(path.join(__dirname, "static", "style.css"), "utf8");
+  assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
+    "少了 [hidden] 的保險規則：.ghost 的 display: block 會蓋過瀏覽器的 "
+    + "[hidden]，隊員就會看到「取消這一題」");
+});
+
 check("隊輔登入後看到掃描畫面，隊員登入後看到等待畫面", async () => {
   const leader = new Phone("L", BASE);
   const m1 = new Phone("M1", BASE);
@@ -216,7 +224,7 @@ check("隊員投票、改票；隊輔即時看到票數，隊員看不到", asyn
   assert.equal(leader.counts()[B], "1");
   assert.match(leader.text("q-submit"), new RegExp(`送出「${A}」`));
   assert.match(leader.text("q-tally"), /已投 3\/3/);
-  assert.match(m1.text("q-tally"), /等候隊輔送出/);
+  assert.match(m1.text("q-tally"), /已投 \d+\/\d+/, "隊員看得到參與人數");
 
   await m1.tapChoice(B);          // 改票
   await leader.poll();

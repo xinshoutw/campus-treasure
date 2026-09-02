@@ -28,6 +28,10 @@
 
 * { box-sizing: border-box; }
 
+/* 作者樣式的 display 會蓋過瀏覽器 UA 的 [hidden] { display: none }，所以
+   .ghost、.scores 這種有設 display 的元素光靠 el.x.hidden = true 藏不掉。 */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
