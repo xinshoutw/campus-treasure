@@ -22,6 +22,7 @@ const ID_RE = /^[A-Z]{5}$/;
 const SCAN_INTERVAL = 100;   // ms，約 10fps
 const SCAN_MAX_EDGE = 640;   // 解碼前先降採樣，避免主執行緒卡頓
 const POLL_INTERVAL = 5000;
+const RESCAN_MISSES = 8;     // 同一組代碼要離開鏡頭這麼多幀才會再次觸發
 const TOAST_MS = 3200;
 const KEY_TOKEN = "treasure.token";
 const KEY_CAMERA = "treasure.camera";
@@ -41,6 +42,8 @@ let cameras = [];
 let cameraIndex = 0;
 let rafId = 0;
 let lastFrame = 0;
+let lastCode = "";
+let misses = 0;
 let pollId = 0;
 let toastId = 0;
 
@@ -242,7 +245,16 @@ function tick(now) {
 
   const frame = ctx.getImageData(0, 0, el.canvas.width, el.canvas.height);
   const found = jsQR(frame.data, frame.width, frame.height, { inversionAttempts: "dontInvert" });
-  if (found?.data) onScan(found.data.trim());
+  if (!found?.data) {
+    // 連續數幀都沒看到 QR，才算貼紙離開鏡頭、解除封鎖
+    if (++misses >= RESCAN_MISSES) lastCode = "";
+    return;
+  }
+  misses = 0;
+  const text = found.data.trim();
+  if (text === lastCode) return;
+  lastCode = text;
+  onScan(text);
 }
 
 function onScan(text) {
