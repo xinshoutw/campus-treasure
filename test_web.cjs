@@ -63,6 +63,7 @@ class Phone {
     this.streams = 0;      // 總共開過幾條 stream
     this.liveTracks = 0;   // 還沒被關掉的 track
     this.frame = 0;
+    this.frames = 0;       // 掃描迴圈跑了幾幀
     this.hang = false;     // 請求永遠不回來
     this.slowPath = null;  // 只有這個 path 會被延遲
     this.camDelay = 0;     // getUserMedia 要多久才回來
@@ -76,6 +77,7 @@ class Phone {
       setInterval: (fn, ms) => { const id = setInterval(fn, ms); this.timers.push(id); return id; },
       // 掃描迴圈：讓 tick 真的一幀一幀跑，才測得到重複掃描的去重
       requestAnimationFrame: (fn) => {
+        this.frames++;
         const id = setTimeout(() => fn(this.frame += 20), 5);
         this.timers.push(id); return id;
       },
@@ -242,6 +244,25 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("投票中不再空轉掃描迴圈", async () => {
+  const leader = new Phone("L", BASE);
+  leader.camera = true;
+  await leader.login(LEADER);
+  await leader.click("scan-toggle");
+  leader.aimAt(QID);
+  await leader.wait(300);
+  assert.equal(leader.screen(), "panel-question");
+
+  leader.frames = 0;
+  await leader.wait(600);
+  assert.ok(leader.frames <= 1, `投票中還跑了 ${leader.frames} 幀，應該停下來`);
+
+  await leader.click("q-cancel");        // 回到等待
+  leader.frames = 0;
+  await leader.wait(300);
+  assert.ok(leader.frames > 5, `回到等待後迴圈要醒過來，只跑了 ${leader.frames} 幀`);
+});
 
 check("下一題送不出去時，立刻回到結果頁並說明，不是隔幾秒才被拉回去", async () => {
   const leader = new Phone("L", BASE);
