@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 
+# IDE
+.idea/
+*.iml
+
 # 機密與執行期資料
 .env
 data.json
