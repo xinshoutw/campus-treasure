@@ -528,7 +528,12 @@ def api_vote(team, role):
 @app.post("/api/submit")
 @_role_required("leader")
 def api_submit(team, role):
-    """送出最高票。平手時 body 要帶 choice，由隊輔指定送哪一個。"""
+    """送出隊輔按鈕上顯示的那個選項。
+
+    body 的 choice 是隊輔螢幕上寫的答案。他看到的票數最多過期一個輪詢週期，
+    所以送出當下要重算並比對：對不上就擋下來，讓他看新的票數再按一次。伺服器
+    自己挑一個送出去的話，紙上寫「送出『對』」卻記成「錯」，沒有人會發現。
+    """
     pick = str((request.get_json(silent=True) or {}).get("choice", "")).strip()
     with _lock:
         live = _round(team)
@@ -540,9 +545,11 @@ def api_submit(team, role):
         counts, winners = _tally(live)
         if not winners:
             return jsonify(error="還沒有人投票"), 409
-        if len(winners) > 1 and pick not in winners:
-            return jsonify(error="票數平手，請點一個要送出的選項"), 409
-        chosen = pick if len(winners) > 1 else winners[0]
+        if pick not in winners:
+            if len(winners) > 1:
+                return jsonify(error="票數平手，請點一個要送出的選項"), 409
+            return jsonify(error=f"票數變了，現在最高票是「{winners[0]}」，請再確認"), 409
+        chosen = pick
 
         qid = live["qid"]
         question = QUESTIONS[qid]

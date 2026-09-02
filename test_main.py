@@ -205,17 +205,51 @@ def test_last_vote_wins_and_counts_are_live():
 def test_submit_needs_votes_and_sends_the_top_one():
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
-    assert client.post("/api/submit", headers=LEADER).status_code == 409, "零票不可以送出"
+    assert client.post("/api/submit", json={"choice": "對"}, headers=LEADER).status_code == 409, "零票不可以送出"
 
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))
     client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d3"))
-    body = client.post("/api/submit", headers=LEADER).get_json()
+    body = client.post("/api/submit", json={"choice": "對"}, headers=LEADER).get_json()
     assert body["phase"] == "revealed"
     assert body["result"]["choice"] == "對"
     assert body["result"]["correct"] is True
     assert body["result"]["votes"] == {"對": 2, "錯": 1}
     assert main._score(1) == 2
+
+
+def test_submit_refuses_a_choice_that_is_no_longer_winning():
+    """隊輔的票數最多過期 1 秒。按鈕上寫什麼就送什麼，對不上就擋下來重看。"""
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d3"))
+    # 隊輔螢幕上此刻是「送出『對』」
+
+    for d in ("d1", "d2"):                       # 按下去之前有人改票，「錯」變成最高票
+        client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, d))
+
+    stale = client.post("/api/submit", json={"choice": "對"}, headers=LEADER)
+    assert stale.status_code == 409, "按鈕寫『對』就不可以記成『錯』"
+    assert main._data["teams"].get("1", {}) == {}, "被擋下來不可以留下紀錄"
+
+    ok = client.post("/api/submit", json={"choice": "錯"}, headers=LEADER).get_json()
+    assert ok["result"]["choice"] == "錯"
+
+
+def test_submit_keeps_the_leaders_tie_pick():
+    """平手時隊輔明確點了一個，之後票數變動也不可以把它換掉。"""
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d2"))
+    # 平手，隊輔點了「錯」
+
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))  # 「對」獨走
+    stale = client.post("/api/submit", json={"choice": "錯"}, headers=LEADER)
+    assert stale.status_code == 409, "隊輔指定的選項不可以被無聲換掉"
+    assert main._score(1) == 0
 
 
 def test_a_tie_needs_the_leader_to_pick():
@@ -246,7 +280,7 @@ def test_rescanning_an_answered_question_is_read_only():
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
-    client.post("/api/submit", headers=LEADER)
+    client.post("/api/submit", json={"choice": "對"}, headers=LEADER)
     client.post("/api/close", headers=LEADER)
 
     body = client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER).get_json()
@@ -324,13 +358,13 @@ def test_a_second_submit_never_overwrites_the_record():
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1"))
-    client.post("/api/submit", headers=LEADER)
+    client.post("/api/submit", json={"choice": "錯"}, headers=LEADER)
     assert main._score(1) == 0
 
     live = main._live["1"]
     live["phase"] = "voting"
     live["votes"] = {"d1": "對"}
-    client.post("/api/submit", headers=LEADER)
+    client.post("/api/submit", json={"choice": "對"}, headers=LEADER)
 
     assert main._data["teams"]["1"]["TESTQ"]["choice"] == "錯", "已記錄的答案被覆寫了"
     assert main._score(1) == 0
@@ -340,7 +374,7 @@ def test_reset_clears_scores_and_live_rounds():
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
-    client.post("/api/submit", headers=LEADER)
+    client.post("/api/submit", json={"choice": "對"}, headers=LEADER)
     assert main._score(1) == 2
 
     assert client.post("/reset").status_code == 401

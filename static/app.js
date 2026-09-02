@@ -61,6 +61,7 @@ let tallied = "";            // 票數的指紋，變了就取消隊輔已點的
 let busy = false;
 let polling = false;         // 同時只允許一次輪詢在飛
 let pendingVote = null;      // 上一票還在飛時又點的那個選項
+let shownWinner = null;      // 送出鈕上寫的那個選項，就是會送出去的那個
 
 let stream = null;
 let cameras = [];
@@ -280,13 +281,16 @@ function buildChoice(text, index, leader) {
 
 function updateSubmit(next, tie) {
   if (!next.voted) {
+    shownWinner = null;
     el.qSubmit.textContent = "還沒有人投票";
     el.qSubmit.disabled = true;
   } else if (tie.length > 1 && !tie.includes(pick)) {
+    shownWinner = null;
     el.qSubmit.textContent = `${tie.join(" · ")} 同票，點一個要送的`;
     el.qSubmit.disabled = true;
   } else {
-    el.qSubmit.textContent = `送出「${tie.length > 1 ? pick : topChoice(next)}」`;
+    shownWinner = tie.length > 1 ? pick : topChoice(next);
+    el.qSubmit.textContent = `送出「${shownWinner}」`;
     el.qSubmit.disabled = false;
   }
 }
@@ -596,8 +600,9 @@ el.scanToggle.addEventListener("click", openCamera);
 el.camSwitch.addEventListener("click", cycleCamera);
 el.qSubmit.addEventListener("click", () => {
   if (busy) return;
-  el.qSubmit.disabled = true;   // 送出可能被伺服器擋（平手／零票），所以只給按下去的回饋
-  act(() => post("/api/submit", pick ? { choice: pick } : {}));
+  el.qSubmit.disabled = true;   // 送出可能被伺服器擋（票數變了），所以只給按下去的回饋
+  // 送出的一定是按鈕上寫的那個。伺服器會重算並比對，對不上就擋下來
+  act(() => post("/api/submit", { choice: shownWinner }));
 });
 
 // 取消與下一題在伺服器端一定成功，直接切畫面不用等
