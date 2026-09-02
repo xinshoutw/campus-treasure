@@ -243,6 +243,29 @@ const C = "企鵝";
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
 
+check("下一題送不出去時，立刻回到結果頁並說明，不是隔幾秒才被拉回去", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+  await m1.tapChoice(A);
+  await leader.poll();
+  await leader.click("q-submit");
+  assert.equal(leader.screen(), "panel-result");
+
+  leader.hang = true;                    // 網路在這一刻斷了
+  leader.clickNow("r-next");
+  await leader.wait(100);
+  assert.equal(leader.screen(), "stage", "先樂觀切過去");
+
+  leader.hang = false;
+  await leader.wait(6800);               // 等逾時
+  assert.equal(leader.screen(), "panel-result", "失敗就要回到結果頁");
+  assert.match(leader.text("toast"), /網路/, "而且要說明為什麼");
+});
+
 check("取消後重掃同一題，隊員的選項順序要跟著換", async () => {
   let caught = null;
   for (let i = 0; i < 15 && !caught; i++) {

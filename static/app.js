@@ -644,10 +644,26 @@ el.qSubmit.addEventListener("click", () => {
   act(() => post("/api/submit", { choice: shownWinner, id: state.question.id }));
 });
 
-// 取消與下一題在伺服器端一定成功，直接切畫面不用等
-const goIdle = () => { if (!busy) { optimistic(IDLE_PATCH); act(() => post("/api/close")); } };
-el.qCancel.addEventListener("click", goIdle);
-el.rNext.addEventListener("click", goIdle);
+/** 取消／下一題：先切畫面不用等。真的送不出去就立刻切回來並說明 —— 讓它
+ *  停在「已經過去了」的假畫面，隊輔會以為換題了，其實全隊還卡在原地。 */
+async function closeRound() {
+  if (busy) return;
+  const before = state;
+  optimistic(IDLE_PATCH);
+  busy = true;
+  try {
+    apply(await post("/api/close"));
+  } catch (err) {
+    if (err.status === 401) { logout(); return; }
+    apply(before);
+    toast(err.message);
+  } finally {
+    busy = false;
+  }
+}
+
+el.qCancel.addEventListener("click", closeRound);
+el.rNext.addEventListener("click", closeRound);
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
