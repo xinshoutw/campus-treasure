@@ -65,6 +65,7 @@ class Phone {
     this.frame = 0;
     this.hang = false;     // 請求永遠不回來
     this.slowPath = null;  // 只有這個 path 會被延遲
+    this.camDelay = 0;     // getUserMedia 要多久才回來
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
@@ -241,6 +242,22 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("切換鏡頭時輪詢插進來，不會漏掉 stream 也不會切回去", async () => {
+  const leader = new Phone("L", BASE);
+  leader.camera = true;
+  await leader.login(LEADER);
+  await leader.click("scan-toggle");
+  await leader.wait(200);
+  assert.equal(leader.liveTracks, 1, "應該剛好一條 stream");
+
+  leader.camDelay = 900;                 // 手機上 getUserMedia 要 0.3-2 秒
+  leader.clickNow("cam-switch");
+  await leader.wait(1600);               // 這段期間至少有一次輪詢
+
+  assert.equal(leader.liveTracks, 1, `有 ${leader.liveTracks} 條 track 沒被關掉`);
+  assert.ok(leader.streams <= 3, `開了 ${leader.streams} 條 stream，太多了`);
+});
 
 check("投票前算好、投票後才送達的輪詢回應，不可以抹掉選擇", async () => {
   const leader = new Phone("L", BASE);

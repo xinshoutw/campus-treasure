@@ -70,6 +70,7 @@ let cameras = [];
 let cameraIndex = 0;
 let cameraGranted = false;   // 成功開過一次，之後每局自動接回來
 let cameraOpening = false;
+let cameraGen = 0;           // 每次開啟的序號，晚到的 stream 靠它判斷該不該丟掉
 let rafId = 0;
 let lastFrame = 0;
 let lastCode = "";
@@ -403,23 +404,34 @@ function setCamera(on) {
 }
 
 async function startCamera(preferredId) {
+  const gen = ++cameraGen;
   stopCamera();
   const attempts = [];
   if (preferredId) attempts.push({ video: { deviceId: { exact: preferredId } } });
   attempts.push({ video: { facingMode: { ideal: "environment" } } });
   attempts.push({ video: true });
 
+  let opened = null;
   let lastError = null;
   for (const constraints of attempts) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      opened = await navigator.mediaDevices.getUserMedia(constraints);
       break;
     } catch (err) {
       lastError = err;
     }
   }
-  if (!stream) throw lastError || new Error("no camera");
+  if (!opened) throw lastError || new Error("no camera");
 
+  // getUserMedia 在手機上要 0.3-2 秒。這段期間有更新的開啟開始了的話，
+  // 這條 stream 已經沒人要了 —— 不主動關掉的話 track 會一直活著，
+  // 相機指示燈整場亮著，而且畫面會被舊的那條蓋回去
+  if (gen !== cameraGen) {
+    opened.getTracks().forEach((t) => t.stop());
+    return;
+  }
+
+  stream = opened;
   cameraGranted = true;
   el.video.srcObject = stream;
   await el.video.play().catch(() => { /* iOS 偶爾拒絕自動播放 */ });
@@ -452,12 +464,15 @@ async function refreshCameraList() {
 }
 
 async function cycleCamera() {
-  if (cameras.length < 2) return;
+  if (cameras.length < 2 || cameraOpening) return;
   const next = cameras[(cameraIndex + 1) % cameras.length].deviceId;
+  cameraOpening = true;   // 沒有這道鎖，等待中的輪詢會另外開一條 stream 把鏡頭切回去
   try {
     await startCamera(next);
   } catch {
     toast("這顆鏡頭開不起來");
+  } finally {
+    cameraOpening = false;
   }
 }
 
