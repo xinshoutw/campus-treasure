@@ -42,6 +42,8 @@ function makeElement(id) {
     querySelector(sel) { return this.children.find((c) => c.className === sel.slice(1)) || null; },
     blur() {}, focus() {},
     classList: { toggle() {}, add() {}, remove() {} },
+    videoWidth: 0, videoHeight: 0, readyState: 0, srcObject: null,
+    play: () => Promise.resolve(),
     getContext: () => ({ drawImage() {}, getImageData: () => ({ data: [], width: 0, height: 0 }) }),
   };
   return el;
@@ -56,6 +58,11 @@ class Phone {
     this.inflight = 0;
     this.maxInflight = 0;
     this.sent = [];        // 送出去的每一個 path，用來抓多餘的請求
+    this.qr = null;        // 鏡頭裡現在對著哪張 QR
+    this.camera = false;   // 這支手機有沒有相機
+    this.streams = 0;      // 總共開過幾條 stream
+    this.liveTracks = 0;   // 還沒被關掉的 track
+    this.frame = 0;
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
@@ -64,7 +71,12 @@ class Phone {
       console,
       setTimeout, clearTimeout, clearInterval,
       setInterval: (fn, ms) => { const id = setInterval(fn, ms); this.timers.push(id); return id; },
-      requestAnimationFrame: () => 0, cancelAnimationFrame: () => {},
+      // 掃描迴圈：讓 tick 真的一幀一幀跑，才測得到重複掃描的去重
+      requestAnimationFrame: (fn) => {
+        const id = setTimeout(() => fn(this.frame += 20), 5);
+        this.timers.push(id); return id;
+      },
+      cancelAnimationFrame: (id) => clearTimeout(id),
       URL, URLSearchParams, Math, Date, JSON, Object, Number, String, Boolean, Array, Error, Promise,
       crypto: { randomUUID: () => `${name}-device` },
       localStorage: {
@@ -76,11 +88,20 @@ class Phone {
       history: { replaceState() {} },
       navigator: {
         mediaDevices: {
-          getUserMedia: () => Promise.reject(Object.assign(new Error("no cam"), { name: "NotFoundError" })),
-          enumerateDevices: () => Promise.resolve([]),
+          getUserMedia: () => (this.camera
+            ? new Promise((r) => setTimeout(r, this.camDelay || 0)).then(() => {
+                this.liveTracks++; this.streams++;
+                return { getTracks: () => [{ stop: () => { this.liveTracks--; } }],
+                         getVideoTracks: () => [{ getSettings: () => ({ deviceId: this.camId || "cam1" }) }] };
+              })
+            : Promise.reject(Object.assign(new Error("no cam"), { name: "NotFoundError" }))),
+          enumerateDevices: () => Promise.resolve(this.camera
+            ? [{ kind: "videoinput", deviceId: "cam1", label: "後鏡頭" },
+               { kind: "videoinput", deviceId: "cam2", label: "前鏡頭" }] : []),
         },
       },
-      jsQR: () => null,
+      // 鏡頭裡「看到」什麼由測試決定：this.qr 有值就每幀都解得到它
+      jsQR: () => (this.qr ? { data: this.qr } : null),
       fetch: (path, opts) => {
         this.sent.push(path);
         this.inflight++;
@@ -109,6 +130,13 @@ class Phone {
 
   /** 停掉輪詢。不關的話上一個 check 的手機會一直打伺服器 */
   close() { this.timers.forEach(clearInterval); this.timers = []; }
+
+  /** 讓 video 看起來有畫面，掃描迴圈才會動；code 就是鏡頭裡那張 QR */
+  aimAt(code) {
+    const v = this.el("video");
+    v.videoWidth = 640; v.videoHeight = 640; v.readyState = 4;
+    this.qr = code;
+  }
 
   el(id) { return this.els[id]; }
   /** 等待所有 in-flight 的 promise 收斂 */
@@ -202,6 +230,28 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("按下一題後，鏡頭裡還是同一張貼紙也不會被彈回結果頁", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  leader.camera = true;
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.click("scan-toggle");
+  leader.aimAt(QID);                     // 對著牆上的題目貼紙
+  await leader.wait(300);
+  assert.equal(leader.screen(), "panel-question", "應該掃到題目了");
+
+  await m1.poll();
+  await m1.tapChoice(A);
+  await leader.poll();
+  await leader.click("q-submit");
+  assert.equal(leader.screen(), "panel-result");
+
+  await leader.click("r-next");           // 貼紙還在鏡頭裡
+  await leader.wait(500);
+  assert.equal(leader.screen(), "stage", "不可以被同一張貼紙彈回結果頁");
+});
 
 check("CSS 沒有蓋掉 hidden 屬性", async () => {
   // DOM stub 只看 el.hidden，永遠抓不到這個 —— 這是靜態檢查

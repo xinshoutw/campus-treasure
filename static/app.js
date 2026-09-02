@@ -420,7 +420,9 @@ async function startCamera(preferredId) {
 function stopCamera() {
   if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-  lastCode = "";
+  // 這裡不能清 lastCode。相機每一局都會關掉再開，清掉的話按「下一題」時
+  // 鏡頭若還對著剛才那張貼紙，會立刻再掃一次、把全隊彈回結果頁。
+  // 解除封鎖只由 RESCAN_MISSES 負責，也就是貼紙真的離開鏡頭。
 }
 
 async function refreshCameraList() {
