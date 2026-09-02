@@ -173,10 +173,17 @@ def load_questions():
 # 圖片快取：啟動時把遠端圖抓下來，活動當天不依賴外部圖床
 # --------------------------------------------------------------------------
 
+# 副檔名一律查表決定。曾經是「拿 Content-Type 的後半段當副檔名」，但那個字串
+# 完全由遠端圖床控制，回一個 image/../../x 就會生出離譜的檔名讓啟動整個掛掉。
 _CONTENT_TYPE_EXT = {
     "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/avif": ".avif",
     "image/svg+xml": ".svg",
 }
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 def _fetch_image(url):
@@ -187,11 +194,13 @@ def _fetch_image(url):
     req = urllib.request.Request(url, headers={"User-Agent": FETCH_UA})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
         ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
-        if not ctype.startswith("image/"):
-            raise ValueError(f"回應不是圖片（Content-Type: {ctype or '未提供'}）")
-        body = resp.read()
+        ext = _CONTENT_TYPE_EXT.get(ctype)
+        if not ext:
+            raise ValueError(f"不支援的圖片格式（Content-Type: {ctype or '未提供'}）")
+        body = resp.read(MAX_IMAGE_BYTES + 1)
+        if len(body) > MAX_IMAGE_BYTES:
+            raise ValueError(f"圖片超過 {MAX_IMAGE_BYTES // 1024 // 1024} MB")
 
-    ext = _CONTENT_TYPE_EXT.get(ctype) or "." + ctype.split("/", 1)[1].split("+")[0]
     path = CACHE_DIR / f"{stem}{ext}"
     path.write_bytes(body)
     return path, False
