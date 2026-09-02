@@ -309,13 +309,18 @@ function logout() {
 async function openQuestion(id) {
   if (busy) return;
   busy = true;
+  let reopened = false;
   try {
     const data = await api(`/api/question/${id}`);
-    if (data.answered) { showResult(data, true); return; }
-    question = data;
-    choice = null;
-    renderQuestion(data);
-    setMode("question");
+    if (data.answered) {
+      showResult(data, true);
+      reopened = true;
+    } else {
+      question = data;
+      choice = null;
+      renderQuestion(data);
+      setMode("question");
+    }
   } catch (err) {
     // 不清掉的話，再多打一個字會被 slice 回同一組壞代碼、又送一次
     el.input.value = "";
@@ -323,6 +328,8 @@ async function openQuestion(id) {
   } finally {
     busy = false;
   }
+  // 題目 payload 不含分數，所以隊友剛加的分要另外拉一次（refreshState 需要 busy 已清掉）
+  if (reopened) refreshState();
 }
 
 function renderQuestion(data) {
