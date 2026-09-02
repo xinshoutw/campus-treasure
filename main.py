@@ -40,7 +40,7 @@ FETCH_TIMEOUT = 20
 # --------------------------------------------------------------------------
 
 def _die(errors, header):
-    print(f"\n❌ {header}\n", file=sys.stderr)
+    print(f"\n[錯誤] {header}\n", file=sys.stderr)
     for err in errors:
         print(f"  {err}", file=sys.stderr)
     print(f"\n共 {len(errors)} 個錯誤，未啟動。\n", file=sys.stderr)
@@ -199,7 +199,7 @@ def cache_images(questions):
     if not todo:
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"↓ 準備 {len(todo)} 張題目圖片…")
+    print(f"準備 {len(todo)} 張題目圖片…")
 
     errors = []
     for question in todo:
@@ -207,10 +207,10 @@ def cache_images(questions):
             path, cached = _fetch_image(question["image"])
         except Exception as exc:  # 下載失敗一律視為致命：破圖的題目沒有意義
             errors.append(f"{question['id']}: 下載失敗 {question['image']}\n      {exc}")
-            print(f"  {question['id']} → ❌ {exc}")
+            print(f"  {question['id']} → 失敗：{exc}")
             continue
         question["image_url"] = f"/static/cache/{path.name}"
-        print(f"  {question['id']} → static/cache/{path.name} {'（已快取）' if cached else '✓'}")
+        print(f"  {question['id']} → static/cache/{path.name}{'（已快取）' if cached else ''}")
     if errors:
         _die(errors, "題目圖片下載失敗")
 
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "192.168.10.101")
     port = int(os.getenv("PORT", "20001"))
     print(
-        f"\n✓ {len(QUESTIONS)} 題 · {len(TOKENS)} 隊 · "
+        f"\n已載入 {len(QUESTIONS)} 題 · {len(TOKENS)} 隊 · "
         f"洗牌 {'開' if RANDOM_CHOICES else '關'} · "
         f"分數列 {'開' if SHOW_SCORES else '關'}"
     )

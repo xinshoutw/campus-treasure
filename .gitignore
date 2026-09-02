@@ -10,3 +10,4 @@ data.json.tmp
 # 產生物
 static/cache/
 qr/
+.DS_Store

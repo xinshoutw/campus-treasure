@@ -19,13 +19,11 @@
   --radius: 14px;
   --tap: 56px;
 
-  --font-display: "Songti TC", "Noto Serif TC", "Noto Serif CJK TC", "Source Han Serif TC", Georgia, serif;
   --font-body: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Helvetica Neue", Arial, sans-serif;
 
   --text-hero: clamp(1.75rem, 1.2rem + 2.6vw, 2.4rem);
   --text-q:    clamp(1.35rem, 1.05rem + 1.7vw, 1.8rem);
 
-  --ease: cubic-bezier(.16, 1, .3, 1);
 }
 
 * { box-sizing: border-box; }
@@ -101,7 +99,7 @@ body::before {
 
 .scores .val {
   display: block;
-  font: 600 1.22rem/1.2 var(--font-display);
+  font: 700 1.22rem/1.2 var(--font-body);
   font-variant-numeric: tabular-nums;
 }
 
@@ -126,7 +124,7 @@ body::before {
 .stage-head { text-align: center; margin-bottom: 1.1rem; }
 
 .display {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 700;
   letter-spacing: .02em;
   margin: 0;
@@ -181,18 +179,18 @@ body::before {
   position: absolute;
   right: .75rem;
   bottom: .75rem;
-  width: 48px;
-  height: 48px;
-  border: 1px solid oklch(100% 0 0 / .3);
-  border-radius: 50%;
-  background: oklch(0% 0 0 / .45);
+  min-height: 44px;
+  padding: 0 1.05rem;
+  border: 1px solid oklch(100% 0 0 / .32);
+  border-radius: 999px;
+  background: oklch(0% 0 0 / .5);
   color: oklch(100% 0 0);
-  font-size: 1.35rem;
-  line-height: 1;
+  font: 500 .9rem var(--font-body);
+  letter-spacing: .04em;
   cursor: pointer;
-  transition: transform .35s var(--ease), background .15s;
+  transition: background .15s, translate .08s;
 }
-.cam-switch:active { transform: rotate(-180deg) scale(.92); background: var(--accent); }
+.cam-switch:active { background: var(--accent); translate: 0 1px; }
 
 .cam-label {
   margin: .5rem .9rem 0;
@@ -226,7 +224,7 @@ body::before {
 }
 .field.code {
   text-align: center;
-  font: 700 1.5rem/1 var(--font-display);
+  font: 700 1.5rem/1 var(--font-body);
   letter-spacing: .3em;
   text-indent: .3em;
 }
@@ -351,7 +349,38 @@ body::before {
 /* ---------- 結果 ---------- */
 
 .result { text-align: center; padding-top: 1.5rem; }
-.mark { font-size: 3.4rem; line-height: 1; margin: 0 0 .6rem; }
+/* 對錯標記用 CSS 畫，不依賴任何字型或 emoji */
+.mark {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto .9rem;
+  border-radius: 50%;
+}
+.result.correct .mark { background: var(--ok); }
+.result.wrong .mark { background: var(--bad); }
+.mark::before, .mark::after { content: ""; position: absolute; border-radius: 2px; }
+
+.result.correct .mark::before {
+  left: 21px;
+  top: 21px;
+  width: 32px;
+  height: 16px;
+  border-left: 8px solid var(--card);
+  border-bottom: 8px solid var(--card);
+  rotate: -45deg;
+}
+
+.result.wrong .mark::before,
+.result.wrong .mark::after {
+  left: 34px;
+  top: 18px;
+  width: 8px;
+  height: 40px;
+  background: var(--card);
+}
+.result.wrong .mark::before { rotate: 45deg; }
+.result.wrong .mark::after { rotate: -45deg; }
 .result .display { font-size: var(--text-hero); }
 .result.correct .display { color: var(--ok); }
 .result.wrong .display { color: var(--bad); }

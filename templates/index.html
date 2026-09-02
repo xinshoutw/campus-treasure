@@ -21,19 +21,19 @@
   <section id="stage" class="stage">
     <div class="stage-head">
       <h1 id="stage-title" class="display">校園尋寶</h1>
-      <p id="stage-hint" class="hint">掃描隊伍 QR-Code，或輸入登入 Token</p>
+      <p id="stage-hint" class="hint">掃描隊伍 QR-Code 登入</p>
     </div>
 
     <div id="scanner" class="scanner" hidden>
       <div class="viewfinder">
         <video id="video" playsinline muted autoplay></video>
         <div class="reticle" aria-hidden="true"></div>
-        <button id="cam-switch" class="cam-switch" type="button" aria-label="切換鏡頭">↻</button>
+        <button id="cam-switch" class="cam-switch" type="button">切換鏡頭</button>
       </div>
       <p id="cam-label" class="cam-label" aria-live="polite"></p>
     </div>
 
-    <button id="scan-toggle" class="ghost" type="button">掃描 QR-Code 登入</button>
+    <button id="scan-toggle" class="ghost" type="button">掃描登入</button>
 
     <form id="entry-form" class="entry" autocomplete="off">
       <input id="entry-input" class="field" type="text" spellcheck="false"
@@ -50,15 +50,15 @@
     <figure id="q-figure" class="figure" hidden><img id="q-image" alt=""></figure>
     <div id="q-choices" class="choices" role="radiogroup" aria-label="選項"></div>
     <button id="q-submit" class="btn" type="button" disabled>送出</button>
-    <button id="q-back" class="ghost" type="button">取消，回到掃描</button>
+    <button id="q-back" class="ghost" type="button">取消</button>
   </section>
 
   <!-- 結果 -->
   <section id="panel-result" class="panel result" hidden>
-    <p id="r-mark" class="mark"></p>
+    <p id="r-mark" class="mark" aria-hidden="true"></p>
     <h2 id="r-title" class="display"></h2>
     <dl id="r-detail" class="detail"></dl>
-    <button id="r-next" class="btn" type="button">繼續掃下一題</button>
+    <button id="r-next" class="btn" type="button">下一題</button>
   </section>
 
 </main>

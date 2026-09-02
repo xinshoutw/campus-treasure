@@ -34,7 +34,7 @@ def main():
         segno.make(qid, error="m").save(OUT_DIR / f"{qid}.png", scale=SCALE, border=BORDER)
         print(f"  qr/{qid}.png   {question['content'][:28]}")
 
-    print(f"\n✓ {len(TOKENS)} 張登入 + {len(QUESTIONS)} 張題目 → {OUT_DIR.name}/\n")
+    print(f"\n完成：{len(TOKENS)} 張登入 + {len(QUESTIONS)} 張題目 → {OUT_DIR.name}/\n")
 
 
 if __name__ == "__main__":

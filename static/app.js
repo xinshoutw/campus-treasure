@@ -13,7 +13,7 @@ const el = {
   qPanel: $("panel-question"), qMeta: $("q-meta"), qContent: $("q-content"),
   qFigure: $("q-figure"), qImage: $("q-image"), qChoices: $("q-choices"),
   qSubmit: $("q-submit"), qBack: $("q-back"),
-  rPanel: $("panel-result"), rMark: $("r-mark"), rTitle: $("r-title"),
+  rPanel: $("panel-result"), rTitle: $("r-title"),
   rDetail: $("r-detail"), rNext: $("r-next"),
   toast: $("toast"), canvas: $("frame"),
 };
@@ -106,7 +106,7 @@ function renderBar(state) {
       return li;
     }));
   }
-  el.progress.textContent = `已答 ${state.answered}/${state.total} · ${fmt(state.score)} 分`;
+  el.progress.textContent = `解題數 ${state.answered}/${state.total} · 共 ${fmt(state.score)} 分`;
 }
 
 function setMode(next) {
@@ -118,7 +118,7 @@ function setMode(next) {
 
   if (next === "login") {
     el.title.textContent = "校園尋寶";
-    el.hint.textContent = "掃描隊伍 QR-Code，或輸入登入 Token";
+    el.hint.textContent = "掃描隊伍 QR-Code 登入";
     el.input.className = "field";
     el.input.placeholder = "輸入登入 Token";
     el.input.maxLength = 64;
@@ -128,12 +128,12 @@ function setMode(next) {
     el.input.value = "";
   } else if (next === "scan") {
     el.title.textContent = `第 ${team} 隊`;
-    el.hint.textContent = "把題目 QR-Code 對準框內";
+    el.hint.textContent = "掃描題目 QR-Code";
     el.input.className = "field code";
-    el.input.placeholder = "5 碼";
+    el.input.placeholder = "ABCDE";
     el.input.maxLength = 5;
     el.input.setAttribute("autocapitalize", "characters");
-    el.submit.textContent = "前往";
+    el.submit.textContent = "送出";
     el.scanToggle.textContent = "開啟相機";
     el.input.value = "";
   }
@@ -361,7 +361,6 @@ async function submitAnswer() {
 function showResult(result, already) {
   el.rPanel.classList.toggle("correct", result.correct);
   el.rPanel.classList.toggle("wrong", !result.correct);
-  el.rMark.textContent = result.correct ? "✅" : "❌";
   el.rTitle.textContent = already
     ? (result.correct ? "隊友已經答對了" : "隊友已經答過了")
     : (result.correct ? "答對了！" : "答錯了");
