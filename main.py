@@ -293,6 +293,18 @@ def _state(team):
 
 app = Flask(__name__)
 
+# 載入 data.json 與快取題目圖片都放在 __main__ 裡（見檔尾），這樣 make_qr.py
+# 匯入本模組時不會被拖去下載圖片、也不需要網路。代價是 `gunicorn main:app`
+# 這類跑法會拿到空的 _data，第一筆作答就把既有的 data.json 整份蓋掉 ——
+# 與其安靜地把全場分數清光，不如整個不服務。
+_started = False
+
+
+@app.before_request
+def _require_startup():
+    if not _started:
+        return jsonify(error="伺服器未以 `uv run main.py` 啟動"), 503
+
 
 def _token_matches(supplied, known):
     # 用 bytes 比對：compare_digest 對含非 ASCII 的 str 會直接丟 TypeError
@@ -433,6 +445,7 @@ QUESTIONS = load_questions()
 if __name__ == "__main__":
     cache_images(QUESTIONS)
     _data = load_data()
+    _started = True
     host = os.getenv("HOST", "192.168.10.101")
     port = int(os.getenv("PORT", "20001"))
     print(
