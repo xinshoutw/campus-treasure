@@ -57,6 +57,7 @@ if (!device) {
 let state = null;
 let pick = null;             // 平手時隊輔點的選項，只活在這台手機上
 let rendered = "";           // 目前畫面的身分，變了才重建 DOM
+let tallied = "";            // 票數的指紋，變了就取消隊輔已點的選項
 let busy = false;
 
 let stream = null;
@@ -152,6 +153,11 @@ function apply(next) {
   const fresh = key !== rendered;
   rendered = key;
   if (fresh) pick = null;
+
+  // 票數一有異動就取消隊輔已點的選項：平手的組合可能已經換人，留著會讓
+  // 送出鈕指著一個根本不在平手名單裡的答案
+  const tally = JSON.stringify(next.counts ?? null);
+  if (tally !== tallied) { tallied = tally; pick = null; }
 
   el.stage.hidden = !(next.phase === "idle" && next.role === "leader");
   el.wait.hidden = !(next.phase === "idle" && next.role === "member");
@@ -261,12 +267,11 @@ function updateSubmit(next, tie) {
   if (!next.voted) {
     el.qSubmit.textContent = "還沒有人投票";
     el.qSubmit.disabled = true;
-  } else if (tie.length > 1 && !pick) {
+  } else if (tie.length > 1 && !tie.includes(pick)) {
     el.qSubmit.textContent = `${tie.join(" · ")} 同票，點一個要送的`;
     el.qSubmit.disabled = true;
   } else {
-    const winner = tie.length > 1 ? pick : topChoice(next);
-    el.qSubmit.textContent = `送出「${winner}」`;
+    el.qSubmit.textContent = `送出「${tie.length > 1 ? pick : topChoice(next)}」`;
     el.qSubmit.disabled = false;
   }
 }

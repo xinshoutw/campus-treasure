@@ -166,6 +166,7 @@ async function boot() {
 const QID = "ABCDE";
 const A = "火車";
 const B = "恐龍";
+const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
@@ -239,6 +240,54 @@ check("平手時送出鈕鎖住，隊輔點一個才解鎖", async () => {
   assert.equal(leader.el("q-submit").disabled, true, "平手時不可以直接送");
 
   await leader.tapChoice(B);
+  assert.equal(leader.el("q-submit").disabled, false);
+  assert.match(leader.text("q-submit"), new RegExp(`送出「${B}」`));
+});
+
+check("平手換人時，隊輔已點的選項要取消，送出鈕重新鎖住", async () => {
+  const leader = new Phone("L", BASE);
+  const [m1, m2] = ["M1", "M2"].map((n) => new Phone(n, BASE));
+  await leader.login(LEADER);
+  for (const m of [m1, m2]) await m.login(MEMBER);
+  await leader.type(QID);
+  for (const m of [m1, m2]) await m.poll();
+
+  await m1.tapChoice(A);
+  await m2.tapChoice(B);
+  await leader.poll();
+  await leader.tapChoice(A);
+  assert.match(leader.text("q-submit"), new RegExp(`送出「${A}」`));
+  assert.deepEqual(leader.checked(), [A]);
+
+  await m1.tapChoice(C);            // 平手組合從 A/B 變成 B/C
+  await leader.poll();
+  assert.deepEqual(leader.checked(), [], "票數變了，隊輔的選擇要取消");
+  assert.equal(leader.el("q-submit").disabled, true, "平手換人後要重新鎖住");
+  assert.doesNotMatch(leader.text("q-submit"), new RegExp(`送出「${A}」`),
+    "送出鈕不可以還指著已經不在平手名單裡的選項");
+  assert.match(leader.text("q-submit"), /同票/);
+
+  await leader.tapChoice(C);        // 重新點一個，才又能送
+  assert.equal(leader.el("q-submit").disabled, false);
+  assert.match(leader.text("q-submit"), new RegExp(`送出「${C}」`));
+});
+
+check("票數變動讓平手消失時，送出鈕指向新的最高票", async () => {
+  const leader = new Phone("L", BASE);
+  const [m1, m2] = ["M1", "M2"].map((n) => new Phone(n, BASE));
+  await leader.login(LEADER);
+  for (const m of [m1, m2]) await m.login(MEMBER);
+  await leader.type(QID);
+  for (const m of [m1, m2]) await m.poll();
+
+  await m1.tapChoice(A);
+  await m2.tapChoice(B);
+  await leader.poll();
+  await leader.tapChoice(A);
+
+  await m1.tapChoice(B);            // 變成 B 獨走
+  await leader.poll();
+  assert.deepEqual(leader.checked(), []);
   assert.equal(leader.el("q-submit").disabled, false);
   assert.match(leader.text("q-submit"), new RegExp(`送出「${B}」`));
 });
