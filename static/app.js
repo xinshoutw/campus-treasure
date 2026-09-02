@@ -288,6 +288,8 @@ async function login(value) {
     startPolling();
     if (!stream) openCamera();
   } catch (err) {
+    // 存著的 token 已經失效就丟掉，否則每次重整都會再失敗一次
+    if (err.status === 401) store.drop(KEY_TOKEN);
     toast(err.message);
   } finally {
     busy = false;
