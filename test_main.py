@@ -15,7 +15,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-os.environ["TEAM_KEY"] = "token-team-one;token-team-two"
+os.environ["MEMBER_KEY"] = "member-one;member-two"
+os.environ["LEADER_KEY"] = "leader-one;leader-two"
 os.environ["RESET_TOKEN"] = "token-reset"
 os.environ["RANDOM_CHOICES"] = "0"
 os.environ["SHOW_SCORES_IN_MENU"] = "1"
@@ -35,7 +36,8 @@ QUESTION = {
 
 def setup():
     """把全域狀態換成測試用的，尤其是 DATA_FILE，別碰到正式資料。"""
-    main.TOKENS = ["token-team-one", "token-team-two"]
+    main.MEMBER_TOKENS = ["member-one", "member-two"]
+    main.LEADER_TOKENS = ["leader-one", "leader-two"]
     main.RESET_TOKEN = "token-reset"
     main.QUESTIONS = {"TESTQ": {**QUESTION, "image_url": None}}
     main.DATA_FILE = Path(tempfile.mkdtemp()) / "data.json"
@@ -134,7 +136,7 @@ def test_endpoints_require_a_token():
 
 def test_answer_is_not_leaked_before_answering():
     client = setup()
-    payload = client.get("/api/question/TESTQ", headers={"X-Token": "token-team-one"}).get_json()
+    payload = client.get("/api/question/TESTQ", headers={"X-Token": "member-one"}).get_json()
     assert payload["answered"] is False
     assert "answer" not in payload, "未作答時不可以回傳正解"
     assert sorted(payload["choices"]) == ["對", "錯"]
@@ -145,7 +147,7 @@ def test_wrong_choice_is_rejected():
     response = client.post(
         "/api/answer",
         json={"id": "TESTQ", "choice": "不是選項"},
-        headers={"X-Token": "token-team-one"},
+        headers={"X-Token": "member-one"},
     )
     assert response.status_code == 400
 
@@ -164,7 +166,7 @@ def test_startup_guard_blocks_requests():
 def test_only_the_first_answer_counts():
     """同隊兩台手機同時送出不同答案，只有第一筆算數，分數不會加兩次。"""
     setup()
-    header = {"X-Token": "token-team-one"}
+    header = {"X-Token": "member-one"}
     results = []
     barrier = threading.Barrier(2)
 
@@ -191,7 +193,7 @@ def test_only_the_first_answer_counts():
 
 def test_reset_clears_scores_and_keeps_a_backup():
     client = setup()
-    client.post("/api/answer", json={"id": "TESTQ", "choice": "對"}, headers={"X-Token": "token-team-one"})
+    client.post("/api/answer", json={"id": "TESTQ", "choice": "對"}, headers={"X-Token": "member-one"})
     assert main._score(1) == 2
 
     assert client.post("/reset").status_code == 401
@@ -201,6 +203,44 @@ def test_reset_clears_scores_and_keeps_a_backup():
     assert body["cleared"] == 1
     assert main._score(1) == 0
     assert (main.DATA_FILE.parent / body["backup"]).exists(), "清空前要留備份"
+
+
+def test_config_rejects_bad_token_sets():
+    """啟動時就要擋下來的 .env 錯誤。"""
+    cases = {
+        "少了 LEADER_KEY": {"MEMBER_KEY": "a;b", "LEADER_KEY": ""},
+        "少了 MEMBER_KEY": {"MEMBER_KEY": "", "LEADER_KEY": "a;b"},
+        "數量不一致": {"MEMBER_KEY": "a;b;c", "LEADER_KEY": "d;e"},
+        "隊員間重複": {"MEMBER_KEY": "a;a", "LEADER_KEY": "c;d"},
+        "隊輔撞到隊員": {"MEMBER_KEY": "a;b", "LEADER_KEY": "b;c"},
+        "撞到 RESET_TOKEN": {"MEMBER_KEY": "a;b", "LEADER_KEY": "c;token-reset"},
+        "還留著舊的 TEAM_KEY": {"MEMBER_KEY": "a;b", "LEADER_KEY": "c;d", "TEAM_KEY": "old"},
+    }
+    for name, env in cases.items():
+        saved = {k: os.environ.get(k) for k in ("MEMBER_KEY", "LEADER_KEY", "TEAM_KEY")}
+        try:
+            for key in saved:
+                os.environ.pop(key, None)
+            os.environ.update({k: v for k, v in env.items() if v})
+            try:
+                main.load_config()
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError(f"{name} 應該要讓啟動失敗")
+        finally:
+            for key, value in saved.items():
+                os.environ.pop(key, None)
+                if value is not None:
+                    os.environ[key] = value
+
+
+def test_role_is_resolved_from_token():
+    setup()
+    assert main._identify_token("leader-two") == (2, "leader")
+    assert main._identify_token("member-one") == (1, "member")
+    assert main._identify_token("nope") == (None, None)
+    assert main._identify_token("") == (None, None)
 
 
 if __name__ == "__main__":

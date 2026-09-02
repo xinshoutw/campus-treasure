@@ -54,20 +54,43 @@ def _flag(name, default=True):
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _token_list(name):
+    return [t.strip() for t in os.getenv(name, "").split(";") if t.strip()]
+
+
 def load_config():
+    """兩排 token，順序即隊號：LEADER_KEY 是隊輔，MEMBER_KEY 是隊員。
+
+    12 把必須互不相同 —— 一把 token 同時是隊輔又是隊員的話，角色判定會看
+    誰先比中，行為由清單順序決定，這種東西活動當天沒有人 debug 得出來。
+    """
     load_dotenv(BASE / ".env")
-    tokens = [t.strip() for t in os.getenv("TEAM_KEY", "").split(";") if t.strip()]
+    members = _token_list("MEMBER_KEY")
+    leaders = _token_list("LEADER_KEY")
     reset_token = os.getenv("RESET_TOKEN", "").strip()
     errors = []
-    if not tokens:
-        errors.append(".env 缺少 TEAM_KEY（格式：TEAM_KEY=第1隊;第2隊;…）")
-    if len(set(tokens)) != len(tokens):
-        errors.append("TEAM_KEY 裡有重複的 token，隊伍會互相竄改分數")
-    if reset_token and reset_token in tokens:
-        errors.append("RESET_TOKEN 與某一隊的 token 相同，那隊隨手一掃就會清空全場")
+
+    if os.getenv("TEAM_KEY"):
+        errors.append("TEAM_KEY 已改名 MEMBER_KEY（隊員），另外要加一排 LEADER_KEY（隊輔）")
+    if not members:
+        errors.append(".env 缺少 MEMBER_KEY（格式：MEMBER_KEY=第1隊隊員;第2隊隊員;…）")
+    if not leaders:
+        errors.append(".env 缺少 LEADER_KEY（格式：LEADER_KEY=第1隊隊輔;第2隊隊輔;…）")
+    if members and leaders and len(members) != len(leaders):
+        errors.append(
+            f"MEMBER_KEY 有 {len(members)} 把、LEADER_KEY 有 {len(leaders)} 把，"
+            "數量必須一致（順序即隊號）"
+        )
+
+    everyone = members + leaders
+    if len(set(everyone)) != len(everyone):
+        errors.append("MEMBER_KEY 與 LEADER_KEY 裡有重複的 token，角色與隊號會混在一起")
+    if reset_token and reset_token in everyone:
+        errors.append("RESET_TOKEN 與某一把隊伍 token 相同，那隊隨手一掃就會清空全場")
+
     if errors:
         _die(errors, ".env 設定錯誤")
-    return tokens, reset_token, _flag("RANDOM_CHOICES"), _flag("SHOW_SCORES_IN_MENU")
+    return members, leaders, reset_token, _flag("RANDOM_CHOICES"), _flag("SHOW_SCORES_IN_MENU")
 
 
 # --------------------------------------------------------------------------
@@ -287,9 +310,9 @@ def _state(team):
     """呼叫者必須持有 _lock。"""
     answers = _data["teams"].get(str(team), {})
     return {
-        "teams": len(TOKENS),
+        "teams": len(MEMBER_TOKENS),
         "show_scores": SHOW_SCORES,
-        "scores": [_score(i) for i in range(1, len(TOKENS) + 1)] if SHOW_SCORES else [],
+        "scores": [_score(i) for i in range(1, len(MEMBER_TOKENS) + 1)] if SHOW_SCORES else [],
         "score": _score(team),
         "answered": sum(1 for qid in answers if qid in QUESTIONS),
         "total": len(QUESTIONS),
@@ -320,17 +343,19 @@ def _token_matches(supplied, known):
     return secrets.compare_digest(supplied.encode("utf-8"), known.encode("utf-8"))
 
 
-def _team_from_token(token):
+def _identify_token(token):
+    """回傳 (隊號, 角色) 或 (None, None)。角色是 "leader" 或 "member"。"""
     if not token:
-        return None
-    for number, known in enumerate(TOKENS, 1):
-        if _token_matches(token, known):
-            return number
-    return None
+        return None, None
+    for role, known_tokens in (("leader", LEADER_TOKENS), ("member", MEMBER_TOKENS)):
+        for number, known in enumerate(known_tokens, 1):
+            if _token_matches(token, known):
+                return number, role
+    return None, None
 
 
-def _current_team():
-    return _team_from_token(request.headers.get("X-Token", "").strip())
+def _current():
+    return _identify_token(request.headers.get("X-Token", "").strip())
 
 
 def _question_payload(question, record):
@@ -364,7 +389,7 @@ def index():
 @app.post("/api/login")
 def api_login():
     token = str((request.get_json(silent=True) or {}).get("token", "")).strip()
-    team = _team_from_token(token)
+    team, _role = _identify_token(token)
     if not team:
         return jsonify(error="登入 Token 無效"), 401
     with _lock:
@@ -373,7 +398,7 @@ def api_login():
 
 @app.get("/api/state")
 def api_state():
-    team = _current_team()
+    team, _role = _current()
     if not team:
         return jsonify(error="請重新登入"), 401
     with _lock:
@@ -382,7 +407,7 @@ def api_state():
 
 @app.get("/api/question/<qid>")
 def api_question(qid):
-    team = _current_team()
+    team, _role = _current()
     if not team:
         return jsonify(error="請重新登入"), 401
     question = QUESTIONS.get(qid.strip().upper())
@@ -395,7 +420,7 @@ def api_question(qid):
 
 @app.post("/api/answer")
 def api_answer():
-    team = _current_team()
+    team, _role = _current()
     if not team:
         return jsonify(error="請重新登入"), 401
 
@@ -448,7 +473,7 @@ def api_reset():
 
 # --------------------------------------------------------------------------
 
-TOKENS, RESET_TOKEN, RANDOM_CHOICES, SHOW_SCORES = load_config()
+MEMBER_TOKENS, LEADER_TOKENS, RESET_TOKEN, RANDOM_CHOICES, SHOW_SCORES = load_config()
 QUESTIONS = load_questions()
 
 if __name__ == "__main__":
@@ -458,7 +483,7 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "192.168.10.101")
     port = int(os.getenv("PORT", "20001"))
     print(
-        f"\n已載入 {len(QUESTIONS)} 題 · {len(TOKENS)} 隊 · "
+        f"\n已載入 {len(QUESTIONS)} 題 · {len(MEMBER_TOKENS)} 隊 · "
         f"洗牌 {'開' if RANDOM_CHOICES else '關'} · "
         f"分數列 {'開' if SHOW_SCORES else '關'} · "
         f"/reset {'開' if RESET_TOKEN else '關'}"
