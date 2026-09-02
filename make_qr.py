@@ -53,6 +53,14 @@ def build_items():
 
 def write_pngs(items):
     OUT_DIR.mkdir(exist_ok=True)
+
+    # 從 questions.yaml 刪掉的題目會留下孤兒 PNG，不清掉就有機會被印出來貼上牆
+    keep = {f"{name}.png" for _, _, name, _ in items}
+    for stale in sorted(OUT_DIR.glob("*.png")):
+        if stale.name not in keep:
+            stale.unlink()
+            print(f"  刪除舊檔 qr/{stale.name}")
+
     for label, payload, name, note in items:
         segno.make_qr(payload, error="m").save(
             OUT_DIR / f"{name}.png", scale=PNG_SCALE, border=QUIET_ZONE
