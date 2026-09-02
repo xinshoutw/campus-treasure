@@ -111,8 +111,13 @@ curl -X POST https://treasure.ntust.org/reset -H "X-Reset-Token: $RESET_TOKEN"
 - 單 process（waitress，8 執行緒）。**不要開多 worker** — 記憶體狀態會分裂，分數會互相覆蓋。
   沒有跑過 `main.py` 的 `__main__` 就啟動（例如 `gunicorn main:app`）時，每個請求都回 503，
   不會安靜地拿空的狀態把 `data.json` 蓋掉。
-- 前端每 **1 秒**輪詢 `/api/state`，畫面完全由伺服器決定。沒有用 SSE/WebSocket：
+- 前端每 **300ms** 輪詢 `/api/state`，畫面完全由伺服器決定。沒有用 SSE/WebSocket：
   每個長連線會佔住一條 waitress 執行緒，40 台裝置遠超過 8 條。
+  實測（6 隊 × 12 題全部答完、分數列開、選項洗牌開）：42 台裝置 42 req/s 時
+  p50 1.2ms / p99 37ms，96 台 95 req/s 時 p50 1.6ms。300ms 的代價是隊員的
+  行動網路流量，每台每小時約 3MB（回應 gzip 後 272 B）。
+- **不要開 Cloudflare proxy。** 實測它會讓首位元組從 17ms 變成 1.2 秒，
+  整場每一次輪詢都付這個代價。直連 origin 時 TLS 由 nginx 自己終結。
 - 送出的檢查與寫入都在同一把 `threading.Lock` 內，所以兩台隊輔同時按送出只有第一筆算數。
 - 選項順序在**開局時洗一次**就固定（`RANDOM_CHOICES`）。每次輪詢重洗的話，
   選項會在使用者手指下面每秒重排。

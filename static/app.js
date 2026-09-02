@@ -31,7 +31,10 @@ const ID_RE = /^[A-Z]{5}$/;
 const SCAN_INTERVAL = 100;   // ms，約 10fps
 const SCAN_MAX_EDGE = 640;   // 解碼前先降採樣，避免主執行緒卡頓
 const RESCAN_MISSES = 8;     // 同一組代碼要離開鏡頭這麼多幀才會再次觸發
-const POLL_INTERVAL = 1000;
+// 300ms：實測伺服器處理 ~3ms，42 台裝置合計 140 req/s，而 96 台跑 95 req/s
+// 時 p50 還是 1.6ms。真正的代價是隊員的行動網路流量（每台每小時約 3MB）。
+// polling 那道鎖會讓回應比週期慢時自動跳過，不會堆疊。
+const POLL_INTERVAL = 300;
 const REQUEST_TIMEOUT = 6000;   // ms。行動網路上請求可能永遠不回來，不能讓它卡死整支手機
 const TOAST_MS = 3200;
 const KEY_TOKEN = "treasure.token";
