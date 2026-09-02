@@ -79,6 +79,9 @@ curl -X POST https://treasure.ntust.org/reset -H "X-Reset-Token: $RESET_TOKEN"
 - 作答的檢查與寫入都在同一把 `threading.Lock` 內，所以同隊多人同時送出時只有第一筆算數。
 - 前端是單頁，相機串流在登入後開一次就一直活著，切換題目不會重啟鏡頭。
 - QR 解碼用 vendored 的 `static/jsQR.js`（不吃 CDN），所有裝置走同一條路徑。
+  已 minify（58KB → 46KB gzip）。要換版本或改動時，取回原始碼後重跑：
+  `bun build static/jsQR.js --no-bundle --minify --outfile=tmp.js && mv tmp.js static/jsQR.js`
+  （`--no-bundle` 是必要的，否則 bundler 會吃掉 UMD 包裝、`window.jsQR` 就不見了。）
 
 ## 出場前手測清單
 
