@@ -243,6 +243,29 @@ const C = "企鵝";
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
 
+check("取消後重掃同一題，隊員的選項順序要跟著換", async () => {
+  let caught = null;
+  for (let i = 0; i < 15 && !caught; i++) {
+    const leader = new Phone("L", BASE);
+    const m1 = new Phone("M1", BASE);
+    await leader.login(LEADER);
+    await m1.login(MEMBER);
+    await leader.type(QID);
+    await m1.poll();                     // 隊員看到第一次的洗牌結果
+
+    await leader.click("q-cancel");      // 隊員的輪詢整段落在取消與重掃之間
+    await leader.type(QID);              // 重掃 → 伺服器重洗
+    await m1.poll();
+
+    if (JSON.stringify(m1.choices()) !== JSON.stringify(leader.choices())) {
+      caught = { leader: leader.choices(), member: m1.choices() };
+    }
+    leader.close(); m1.close();
+  }
+  assert.equal(caught, null,
+    caught && `隊輔 ${JSON.stringify(caught.leader)} vs 隊員 ${JSON.stringify(caught.member)}`);
+});
+
 check("切換鏡頭時輪詢插進來，不會漏掉 stream 也不會切回去", async () => {
   const leader = new Phone("L", BASE);
   leader.camera = true;

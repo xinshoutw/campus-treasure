@@ -175,7 +175,10 @@ function apply(next) {
   state = next;
   renderBar(next);
 
-  const key = `${next.role}:${next.phase}:${next.question?.id ?? ""}`;
+  // 選項順序也要進 key：取消後重掃同一題時伺服器會重洗，只看題號的話
+  // 輪詢整段落在取消與重掃之間的隊員永遠不會重建按鈕，順序就跟大家不一樣了
+  const key = `${next.role}:${next.phase}:${next.question?.id ?? ""}`
+    + `:${(next.question?.choices ?? []).join("\u0000")}`;
   const fresh = key !== rendered;
   rendered = key;
   if (fresh) pick = null;
