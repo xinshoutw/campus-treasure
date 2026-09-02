@@ -47,14 +47,20 @@ function makeElement(id) {
   return el;
 }
 
+const LIVE_PHONES = [];   // check 結束要全部關掉，不然輪詢會一直累積下去
+
 class Phone {
   constructor(name, base) {
     this.name = name;
+    this.delay = 0;        // 人為的網路延遲，毫秒
     this.els = {};
+    this.timers = [];
+    LIVE_PHONES.push(this);
     const store = new Map();
     const sandbox = {
       console,
-      setTimeout, clearTimeout, setInterval, clearInterval,
+      setTimeout, clearTimeout, clearInterval,
+      setInterval: (fn, ms) => { const id = setInterval(fn, ms); this.timers.push(id); return id; },
       requestAnimationFrame: () => 0, cancelAnimationFrame: () => {},
       URL, URLSearchParams, Math, Date, JSON, Object, Number, String, Boolean, Array, Error, Promise,
       crypto: { randomUUID: () => `${name}-device` },
@@ -72,7 +78,9 @@ class Phone {
         },
       },
       jsQR: () => null,
-      fetch: (path, opts) => fetch(base + path, opts),
+      fetch: (path, opts) => (this.delay
+        ? new Promise((r) => setTimeout(r, this.delay)).then(() => fetch(base + path, opts))
+        : fetch(base + path, opts)),
       document: {
         getElementById: (id) => (this.els[id] ||= makeElement(id)),
         createElement: (tag) => makeElement(`<${tag}>`),
@@ -86,9 +94,12 @@ class Phone {
     vm.runInContext(SRC, sandbox, { filename: "app.js" });
   }
 
+  /** 停掉輪詢。不關的話上一個 check 的手機會一直打伺服器 */
+  close() { this.timers.forEach(clearInterval); this.timers = []; }
+
   el(id) { return this.els[id]; }
   /** 等待所有 in-flight 的 promise 收斂 */
-  settle() { return new Promise((r) => setTimeout(r, 60)); }
+  settle() { return new Promise((r) => setTimeout(r, 150)); }
 
   async login(token) {
     this.el("entry-input").value = token;
@@ -101,6 +112,14 @@ class Phone {
     await this.settle();
   }
   async click(id) { this.el(id).fire("click"); await this.settle(); }
+  /** 點下去但不等回應，用來檢查畫面有沒有先動 */
+  clickNow(id) { this.el(id).fire("click"); }
+  tapChoiceNow(text) {
+    const button = this.el("q-choices").children.find((c) => c.dataset.choice === text);
+    if (!button) throw new Error(`${this.name}: 找不到選項 ${text}`);
+    button.fire("click");
+  }
+  wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
   async tapChoice(text) {
     const button = this.el("q-choices").children.find((c) => c.dataset.choice === text);
     if (!button) throw new Error(`${this.name}: 找不到選項 ${text}`);
@@ -231,6 +250,63 @@ check("隊員投票、改票；隊輔即時看到票數，隊員看不到", asyn
   assert.equal(leader.counts()[A], "1");
   assert.equal(leader.counts()[B], "2");
   assert.match(leader.text("q-submit"), new RegExp(`送出「${B}」`));
+});
+
+check("隊員點選項立刻反白，不等伺服器回應", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+
+  m1.delay = 500;                       // 回應要 0.5 秒才會回來
+  m1.tapChoiceNow(A);
+  await m1.wait(60);                    // 遠早於回應
+  assert.deepEqual(m1.checked(), [A], "點下去就要反白");
+  assert.match(m1.text("q-tally"), /已投 1\//, "已投人數也要立刻跳");
+
+  m1.delay = 0;
+  await m1.wait(600);                   // 等回應收斂
+  assert.deepEqual(m1.checked(), [A], "伺服器回來後結果一致");
+  await leader.poll();
+  assert.equal(leader.counts()[A], "1");
+});
+
+check("隊輔按下一題立刻回到等待，不等伺服器回應", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+  await m1.tapChoice(A);
+  await leader.poll();
+  await leader.click("q-submit");
+
+  leader.delay = 500;
+  leader.clickNow("r-next");
+  await leader.wait(60);
+  assert.equal(leader.screen(), "stage", "按下去就要回到掃描畫面");
+
+  leader.delay = 0;
+  await leader.wait(600);
+  assert.equal(leader.screen(), "stage");
+});
+
+check("隊輔按取消立刻回到等待，不等伺服器回應", async () => {
+  const leader = new Phone("L", BASE);
+  await leader.login(LEADER);
+  await leader.type(QID);
+
+  leader.delay = 500;
+  leader.clickNow("q-cancel");
+  await leader.wait(60);
+  assert.equal(leader.screen(), "stage");
+
+  leader.delay = 0;
+  await leader.wait(600);
+  assert.equal(leader.screen(), "stage");
 });
 
 check("平手時送出鈕鎖住，隊輔點一個才解鎖", async () => {
@@ -398,6 +474,7 @@ check("壞掉的 token：不會登入，也不會留在 localStorage", async () 
   const server = await boot();
   let failed = 0;
   for (const [name, fn] of checks) {
+    LIVE_PHONES.splice(0).forEach((p) => p.close());
     await fetch(BASE + "/reset", { method: "POST", headers: { "X-Reset-Token": RESET_TOKEN } });
     try {
       await fn();

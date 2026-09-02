@@ -64,6 +64,7 @@ let stream = null;
 let cameras = [];
 let cameraIndex = 0;
 let cameraGranted = false;   // 成功開過一次，之後每局自動接回來
+let cameraOpening = false;
 let rafId = 0;
 let lastFrame = 0;
 let lastCode = "";
@@ -99,6 +100,17 @@ async function api(path, options = {}) {
 
 const post = (path, body) =>
   api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+/** 先照使用者的動作把畫面改掉，再送出去讓伺服器確認。
+ *
+ * 送不出去也不會卡住錯的畫面：act 的 catch 會提示，而且下一次輪詢（1 秒內）
+ * 就會用伺服器的狀態蓋回來。 */
+function optimistic(patch) {
+  apply({ ...state, ...patch });
+}
+
+const IDLE_PATCH = { phase: "idle", question: undefined, counts: undefined, tie: undefined,
+                     voted: undefined, result: undefined };
 
 /** 包住一次使用者動作：期間停掉輪詢與掃描，結束後把回傳的 state 畫上去。 */
 async function act(run) {
@@ -219,6 +231,7 @@ function renderVoting(next, fresh) {
     el.qChoices.replaceChildren(...q.choices.map((text, i) => buildChoice(text, i, leader)));
     el.qSubmit.hidden = !leader;
     el.qCancel.hidden = !leader;
+    el.qCancel.disabled = false;
   }
 
   const tie = next.tie ?? [];
@@ -287,6 +300,8 @@ function onChoice(text, leader) {
     renderVoting(state, false);
     return;
   }
+  // 先反白再送：不要讓使用者為了一趟網路來回而懷疑自己沒點到
+  optimistic({ my_choice: text, voted: state.voted + (state.my_choice ? 0 : 1) });
   act(() => post("/api/vote", { choice: text }));
 }
 
@@ -324,6 +339,7 @@ function renderResult(next, fresh) {
   }));
 
   el.rNext.hidden = next.role !== "leader";
+  el.rNext.disabled = false;
 }
 
 // ---------------------------------------------------------------- 相機
@@ -401,7 +417,12 @@ async function cycleCamera() {
 }
 
 function openCamera() {
-  startCamera(store.get(KEY_CAMERA)).catch((err) => toast(cameraMessage(err)));
+  // 等待時每秒輪詢一次都會叫到這裡，相機還在開的時候不能再開一次
+  if (cameraOpening) return;
+  cameraOpening = true;
+  startCamera(store.get(KEY_CAMERA))
+    .catch((err) => toast(cameraMessage(err)))
+    .finally(() => { cameraOpening = false; });
 }
 
 function cameraMessage(err) {
@@ -539,9 +560,16 @@ el.input.addEventListener("input", () => {
 
 el.scanToggle.addEventListener("click", openCamera);
 el.camSwitch.addEventListener("click", cycleCamera);
-el.qSubmit.addEventListener("click", () => act(() => post("/api/submit", pick ? { choice: pick } : {})));
-el.qCancel.addEventListener("click", () => act(() => post("/api/close")));
-el.rNext.addEventListener("click", () => act(() => post("/api/close")));
+el.qSubmit.addEventListener("click", () => {
+  if (busy) return;
+  el.qSubmit.disabled = true;   // 送出可能被伺服器擋（平手／零票），所以只給按下去的回饋
+  act(() => post("/api/submit", pick ? { choice: pick } : {}));
+});
+
+// 取消與下一題在伺服器端一定成功，直接切畫面不用等
+const goIdle = () => { if (!busy) { optimistic(IDLE_PATCH); act(() => post("/api/close")); } };
+el.qCancel.addEventListener("click", goIdle);
+el.rNext.addEventListener("click", goIdle);
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
