@@ -35,7 +35,7 @@ MIN_CHOICES, MAX_CHOICES = 2, 10
 QUESTION_KEYS = {"id", "content", "answer", "choices", "image", "points"}
 FETCH_UA = "Mozilla/5.0 (compatible; treasure-hunt/1.0)"
 FETCH_TIMEOUT = 20
-ONLINE_TIMEOUT = 10   # 秒。隊員每秒輪詢一次，超過這麼久沒回來就當離線
+ONLINE_TIMEOUT = 30   # 秒。隊員每秒輪詢一次；設太短的話，切去看個訊息就被當成離線
 
 
 # --------------------------------------------------------------------------
@@ -336,13 +336,18 @@ def _round(team):
 
 
 def _online(team):
-    """呼叫者必須持有 _lock。順便把逾時的裝置清掉，不然數字只會往上長。"""
+    """呼叫者必須持有 _lock。順便把逾時的裝置清掉，不然數字只會往上長。
+
+    投過票的人一律算在場。投完就鎖屏是常態，手機一鎖就停止輪詢，光看
+    _seen 的話隊輔會看到「已投 3 / 在線 0」——票明明在，人明明就站在旁邊。
+    """
     now = time.monotonic()
     seen = _seen.setdefault(str(team), {})
     for device, last in list(seen.items()):
         if now - last >= ONLINE_TIMEOUT:
             del seen[device]
-    return len(seen)
+    live = _live.get(str(team))
+    return len(set(seen) | set(live["votes"] if live else ()))
 
 
 def _tally(live):

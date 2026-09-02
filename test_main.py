@@ -335,6 +335,19 @@ def test_scan_rejects_unknown_question():
     assert client.get("/api/state", headers=LEADER).get_json()["phase"] == "idle"
 
 
+def test_online_never_undercounts_people_who_have_voted():
+    """投完票就鎖屏是常態。投過票的人一定算在場，不然會出現「已投 3 / 在線 0」。"""
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    for d in ("d1", "d2", "d3"):
+        client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, d))
+        main._seen["1"][d] -= main.ONLINE_TIMEOUT + 1      # 三支手機都鎖屏了
+
+    state = client.get("/api/state", headers=LEADER).get_json()
+    assert state["voted"] == 3
+    assert state["online"] >= state["voted"], f"已投 {state['voted']} / 在線 {state['online']}"
+
+
 def test_online_count_only_counts_recent_members():
     client = setup()
     client.get("/api/state", headers=device(MEMBER, "d1"))
