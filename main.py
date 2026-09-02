@@ -266,6 +266,18 @@ _live = {}   # 隊號(str) -> {"phase", "qid", "choices", "votes": {device: choi
 _seen = {}   # 隊號(str) -> {device: monotonic 時戳}
 
 
+# 每次真正改到狀態就 +1。前端靠它丟掉「伺服器早就算好、下行拖慢才送達」的
+# 過期回應 —— 那種回應會把隊員剛投的票從畫面上抹掉。
+# _seen 的更新不算，否則每次輪詢都會 +1，就沒有東西是過期的了。
+_version = 0
+
+
+def _bump():
+    """呼叫者必須持有 _lock。"""
+    global _version
+    _version += 1
+
+
 def _blank_round():
     return {"phase": "idle", "qid": None, "choices": [], "votes": {}}
 
@@ -359,6 +371,7 @@ def _state(team, role, device=None):
         "answered": sum(1 for qid in answers if qid in QUESTIONS),
         "total": len(QUESTIONS),
         "online": _online(team),   # 隊輔掃題目前就想知道人到齊了沒
+        "v": _version,
     }
     if live["phase"] == "idle":
         return state
@@ -503,6 +516,7 @@ def api_scan(team, role):
             "choices": choices,
             "votes": {},
         }
+        _bump()
         return jsonify(_state(team, role))
 
 
@@ -521,6 +535,7 @@ def api_vote(team, role):
         if choice not in live["choices"]:
             return jsonify(error="不是這題的選項"), 400
         live["votes"][device] = choice
+        _bump()
         _touch(team, role, device)
         return jsonify(_state(team, role, device))
 
@@ -565,6 +580,7 @@ def api_submit(team, role):
             _flush()
         live["phase"] = "revealed"
         live["votes"] = {}
+        _bump()
         return jsonify(_state(team, role))
 
 
@@ -574,6 +590,7 @@ def api_close(team, role):
     """回到等待題目。投票中按下去就是取消這一局，票全部丟掉、不留紀錄。"""
     with _lock:
         _live[str(team)] = _blank_round()
+        _bump()
         return jsonify(_state(team, role))
 
 
@@ -592,6 +609,7 @@ def api_reset():
         _data["teams"] = {}
         _live.clear()
         _seen.clear()
+        _bump()
         _flush()
     print(f"[重置] 清空 {cleared} 筆作答紀錄" + (f"，已備份為 {backup}" if backup else ""))
     return jsonify(ok=True, cleared=cleared, backup=backup)

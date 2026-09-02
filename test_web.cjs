@@ -64,6 +64,7 @@ class Phone {
     this.liveTracks = 0;   // 還沒被關掉的 track
     this.frame = 0;
     this.hang = false;     // 請求永遠不回來
+    this.slowPath = null;  // 只有這個 path 會被延遲
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
@@ -118,11 +119,12 @@ class Phone {
             if (sig) sig.addEventListener("abort", () => { done(); reject(sig.reason || new Error("aborted")); });
           });
         }
+        const slow = this.delay && (!this.slowPath || path.startsWith(this.slowPath));
         const late = (v, throwIt) => new Promise((r) => setTimeout(r, this.delay))
           .then(() => { done(); if (throwIt) throw v; return v; });
         return fetch(base + path, opts).then(
-          (r) => (this.delay ? late(r, false) : (done(), r)),
-          (e) => (this.delay ? late(e, true) : (done(), Promise.reject(e))));
+          (r) => (slow ? late(r, false) : (done(), r)),
+          (e) => (slow ? late(e, true) : (done(), Promise.reject(e))));
       },
       document: {
         getElementById: (id) => (this.els[id] ||= makeElement(id)),
@@ -239,6 +241,36 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("投票前算好、投票後才送達的輪詢回應，不可以抹掉選擇", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+  const choice = m1.choices()[0];
+
+  // /api/state 的回應被下行拖慢：伺服器早就算好（還沒有票），送達時票已經進去了
+  m1.slowPath = "/api/state";
+  m1.delay = 1200;
+  m1.poll();                             // 不等，這一發帶的是「還沒投票」的狀態
+  await m1.wait(150);
+  m1.slowPath = "/api/vote";             // 投票本身要快
+  m1.delay = 0;
+  await m1.tapChoice(choice);
+  assert.deepEqual(m1.checked(), [choice]);
+
+  // 全程取樣：過期回應送達的那一瞬間也不可以掉，之後被輪詢補回來不算過關
+  const seen = new Set();
+  const sampler = setInterval(() => seen.add(m1.checked().join(",") + "|" + m1.text("q-tally")), 20);
+  await m1.wait(1600);                   // 那個過期的 state 現在才送達
+  clearInterval(sampler);
+  const bad = [...seen].filter((v) => !v.startsWith(choice + "|") || /已投 0/.test(v));
+  assert.deepEqual(bad, [], `中途閃過的畫面：${bad.join("  /  ")}`);
+  await leader.poll();
+  assert.equal(leader.counts()[choice], "1");
+});
 
 check("登入時網路一閃，恢復後會自己接回來", async () => {
   const phone = new Phone("M1", BASE);

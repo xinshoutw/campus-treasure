@@ -58,6 +58,7 @@ if (!device) {
 let state = null;
 let pick = null;             // 平手時隊輔點的選項，只活在這台手機上
 let rendered = "";           // 目前畫面的身分，變了才重建 DOM
+let appliedVersion = -1;     // 已經畫上去的伺服器版本，用來丟掉過期回應
 let tallied = "";            // 票數的指紋，變了就取消隊輔已點的選項
 let busy = false;
 let polling = false;         // 同時只允許一次輪詢在飛
@@ -164,6 +165,12 @@ function renderBar(next) {
 
 /** 伺服器說什麼就畫什麼。fresh 表示題目或階段換了，要重建 DOM。 */
 function apply(next) {
+  // 慢下行會讓「投票前就算好」的回應在投票之後才送達，畫上去會把剛投的票
+  // 從畫面上抹掉。版本比已畫的舊就直接丟掉。
+  if (next.v !== undefined) {
+    if (next.v < appliedVersion) return;
+    appliedVersion = next.v;
+  }
   state = next;
   renderBar(next);
 
