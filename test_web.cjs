@@ -63,6 +63,7 @@ class Phone {
     this.streams = 0;      // 總共開過幾條 stream
     this.liveTracks = 0;   // 還沒被關掉的 track
     this.frame = 0;
+    this.hang = false;     // 請求永遠不回來
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
@@ -78,6 +79,7 @@ class Phone {
       },
       cancelAnimationFrame: (id) => clearTimeout(id),
       URL, URLSearchParams, Math, Date, JSON, Object, Number, String, Boolean, Array, Error, Promise,
+      AbortSignal,
       crypto: { randomUUID: () => `${name}-device` },
       localStorage: {
         getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -109,6 +111,13 @@ class Phone {
         const done = () => { this.inflight--; };
         // 延遲加在回應之後：真實的慢下行是伺服器早就算完了，只是回應晚到。
         // 加在請求之前會變成「伺服器晚點才算」，測不到過期回應的問題。
+        if (this.hang) {
+          // 請求永遠不回來，但要尊重 AbortSignal
+          return new Promise((_, reject) => {
+            const sig = opts && opts.signal;
+            if (sig) sig.addEventListener("abort", () => { done(); reject(sig.reason || new Error("aborted")); });
+          });
+        }
         const late = (v, throwIt) => new Promise((r) => setTimeout(r, this.delay))
           .then(() => { done(); if (throwIt) throw v; return v; });
         return fetch(base + path, opts).then(
@@ -230,6 +239,27 @@ const C = "企鵝";
 
 const checks = [];
 const check = (name, fn) => checks.push([name, fn]);
+
+check("卡住的請求會逾時，手機不會被凍住", async () => {
+  const leader = new Phone("L", BASE);
+  const m1 = new Phone("M1", BASE);
+  await leader.login(LEADER);
+  await m1.login(MEMBER);
+  await leader.type(QID);
+  await m1.poll();
+
+  m1.hang = true;                       // 這一票永遠飛不回來
+  m1.tapChoiceNow(m1.choices()[0]);
+  await m1.wait(1000);
+  m1.sent = [];
+  await m1.wait(1500);
+  assert.equal(m1.sent.length, 0, "卡住期間輪詢確實停住了（預期行為）");
+
+  m1.hang = false;
+  await m1.wait(9000);                  // 等逾時觸發
+  assert.ok(m1.sent.length > 0, `逾時後應該恢復輪詢，實際只送了 ${m1.sent.length} 個請求`);
+  assert.match(m1.text("toast"), /網路|逾時|連不上/, "要告訴使用者發生什麼事");
+});
 
 check("按下一題後，鏡頭裡還是同一張貼紙也不會被彈回結果頁", async () => {
   const leader = new Phone("L", BASE);

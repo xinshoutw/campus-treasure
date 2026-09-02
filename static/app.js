@@ -32,6 +32,7 @@ const SCAN_INTERVAL = 100;   // ms，約 10fps
 const SCAN_MAX_EDGE = 640;   // 解碼前先降採樣，避免主執行緒卡頓
 const RESCAN_MISSES = 8;     // 同一組代碼要離開鏡頭這麼多幀才會再次觸發
 const POLL_INTERVAL = 1000;
+const REQUEST_TIMEOUT = 6000;   // ms。行動網路上請求可能永遠不回來，不能讓它卡死整支手機
 const TOAST_MS = 3200;
 const KEY_TOKEN = "treasure.token";
 const KEY_DEVICE = "treasure.device";
@@ -87,9 +88,11 @@ async function api(path, options = {}) {
 
   let res;
   try {
-    res = await fetch(path, { ...options, headers });
+    // 沒有逾時的話，一個卡住的請求會讓 busy 永遠是 true：輪詢停掉、
+    // 每個按鈕都沒反應，直到作業系統的 TCP timeout（數十秒）才解開
+    res = await fetch(path, { ...options, headers, signal: AbortSignal.timeout?.(REQUEST_TIMEOUT) });
   } catch {
-    throw new Error("連不上伺服器，檢查一下網路");
+    throw new Error("網路不穩，沒送出去，再試一次");
   }
   let data = {};
   try { data = await res.json(); } catch { /* 非 JSON 回應 */ }
