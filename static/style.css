@@ -67,9 +67,7 @@ body::before {
   background: linear-gradient(var(--paper-deep), color-mix(in oklch, var(--paper-deep) 88%, var(--paper)));
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 oklch(100% 0 0 / .5) inset, 0 6px 18px -14px oklch(20% .03 60 / .7);
-  padding: .55rem var(--pad) calc(.55rem + env(safe-area-inset-top)) ;
-  padding-top: calc(.55rem + env(safe-area-inset-top));
-  padding-bottom: .5rem;
+  padding: calc(.55rem + env(safe-area-inset-top)) var(--pad) .5rem;
 }
 
 .scores {
