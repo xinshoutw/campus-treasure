@@ -5,6 +5,7 @@
 在鎖內整份寫回 data.json 並原子換檔，重啟不掉分。
 """
 
+import functools
 import json
 import os
 import random
@@ -15,6 +16,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from hashlib import sha1
 from pathlib import Path
 
@@ -33,6 +35,7 @@ MIN_CHOICES, MAX_CHOICES = 2, 10
 QUESTION_KEYS = {"id", "content", "answer", "choices", "image", "points"}
 FETCH_UA = "Mozilla/5.0 (compatible; treasure-hunt/1.0)"
 FETCH_TIMEOUT = 20
+ONLINE_TIMEOUT = 10   # 秒。隊員每秒輪詢一次，超過這麼久沒回來就當離線
 
 
 # --------------------------------------------------------------------------
@@ -257,6 +260,15 @@ def cache_images(questions):
 _lock = threading.Lock()
 _data = {"teams": {}}
 
+# 進行中的一局，只存記憶體：重啟就重來，隊輔重掃一次即可。已送出的答案在
+# _data 裡，跟以前一樣重啟不掉分。
+_live = {}   # 隊號(str) -> {"phase", "qid", "choices", "votes": {device: choice}}
+_seen = {}   # 隊號(str) -> {device: monotonic 時戳}
+
+
+def _blank_round():
+    return {"phase": "idle", "qid": None, "choices": [], "votes": {}}
+
 
 def load_data():
     if not DATA_FILE.exists():
@@ -306,17 +318,80 @@ def _score(team):
     )
 
 
-def _state(team):
+def _round(team):
     """呼叫者必須持有 _lock。"""
+    return _live.setdefault(str(team), _blank_round())
+
+
+def _online(team):
+    """呼叫者必須持有 _lock。順便把逾時的裝置清掉，不然數字只會往上長。"""
+    now = time.monotonic()
+    seen = _seen.setdefault(str(team), {})
+    for device, last in list(seen.items()):
+        if now - last >= ONLINE_TIMEOUT:
+            del seen[device]
+    return len(seen)
+
+
+def _tally(live):
+    """呼叫者必須持有 _lock。回傳 (各選項票數, 最高票的選項)。
+
+    最高票依 live["choices"] 的順序排，所以平手清單對每個人都一樣。
+    """
+    counts = Counter(live["votes"].values())
+    top = max(counts.values(), default=0)
+    winners = [c for c in live["choices"] if counts.get(c, 0) == top] if top else []
+    return counts, winners
+
+
+def _state(team, role, device=None):
+    """呼叫者必須持有 _lock。隊員拿到的東西永遠不含各選項票數與正解。"""
     answers = _data["teams"].get(str(team), {})
-    return {
+    live = _round(team)
+    state = {
+        "team": team,
+        "role": role,
+        "phase": live["phase"],
         "teams": len(MEMBER_TOKENS),
         "show_scores": SHOW_SCORES,
         "scores": [_score(i) for i in range(1, len(MEMBER_TOKENS) + 1)] if SHOW_SCORES else [],
         "score": _score(team),
         "answered": sum(1 for qid in answers if qid in QUESTIONS),
         "total": len(QUESTIONS),
+        "online": _online(team),   # 隊輔掃題目前就想知道人到齊了沒
     }
+    if live["phase"] == "idle":
+        return state
+
+    question = QUESTIONS[live["qid"]]
+    state["question"] = {
+        "id": question["id"],
+        "content": question["content"],
+        "image": question["image_url"],
+        "points": question["points"],
+    }
+
+    if live["phase"] == "voting":
+        # 選項順序是開局時洗好存下來的：每次輪詢重洗的話根本點不到
+        state["question"]["choices"] = live["choices"]
+        state["voted"] = len(live["votes"])
+        if role == "member":
+            state["my_choice"] = live["votes"].get(device)
+        else:
+            counts, winners = _tally(live)
+            state["counts"] = {c: counts.get(c, 0) for c in live["choices"]}
+            state["tie"] = winners if len(winners) > 1 else []
+        return state
+
+    record = answers.get(live["qid"], {})
+    state["result"] = {
+        "choice": record.get("choice"),
+        "correct": record.get("correct", False),
+        "answer": question["answer"],
+        "earned": question["points"] if record.get("correct") else 0,
+        "votes": record.get("votes", {}),   # 舊的紀錄沒有這欄，給空的
+    }
+    return state
 
 
 # --------------------------------------------------------------------------
@@ -358,27 +433,29 @@ def _current():
     return _identify_token(request.headers.get("X-Token", "").strip())
 
 
-def _question_payload(question, record):
-    payload = {
-        "id": question["id"],
-        "content": question["content"],
-        "image": question["image_url"],
-        "points": question["points"],
-    }
-    if record:
-        payload.update(
-            answered=True,
-            choice=record["choice"],
-            correct=record["correct"],
-            answer=question["answer"],
-            earned=question["points"] if record["correct"] else 0,
-        )
-    else:
-        choices = list(question["choices"])
-        if RANDOM_CHOICES:
-            random.shuffle(choices)
-        payload.update(answered=False, choices=choices)
-    return payload
+def _device():
+    return request.headers.get("X-Device", "").strip()
+
+
+def _role_required(role=None):
+    """把「登入了沒、是不是對的角色」擋在 view 外面，view 只收 (team, role)。"""
+    def wrap(view):
+        @functools.wraps(view)
+        def inner(*args, **kwargs):
+            team, actual = _current()
+            if not team:
+                return jsonify(error="請重新登入"), 401
+            if role and actual != role:
+                return jsonify(error="這個操作不屬於你的角色"), 403
+            return view(team, actual, *args, **kwargs)
+        return inner
+    return wrap
+
+
+def _touch(team, role, device):
+    """呼叫者必須持有 _lock。只有隊員算進在線人數，隊輔不算。"""
+    if role == "member" and device:
+        _seen.setdefault(str(team), {})[device] = time.monotonic()
 
 
 @app.get("/")
@@ -389,68 +466,108 @@ def index():
 @app.post("/api/login")
 def api_login():
     token = str((request.get_json(silent=True) or {}).get("token", "")).strip()
-    team, _role = _identify_token(token)
+    team, role = _identify_token(token)
     if not team:
         return jsonify(error="登入 Token 無效"), 401
+    device = _device()
     with _lock:
-        return jsonify(team=team, **_state(team))
+        _touch(team, role, device)
+        return jsonify(_state(team, role, device))
 
 
 @app.get("/api/state")
-def api_state():
-    team, _role = _current()
-    if not team:
-        return jsonify(error="請重新登入"), 401
+@_role_required()
+def api_state(team, role):
+    device = _device()
     with _lock:
-        return jsonify(team=team, **_state(team))
+        _touch(team, role, device)
+        return jsonify(_state(team, role, device))
 
 
-@app.get("/api/question/<qid>")
-def api_question(qid):
-    team, _role = _current()
-    if not team:
-        return jsonify(error="請重新登入"), 401
-    question = QUESTIONS.get(qid.strip().upper())
+@app.post("/api/scan")
+@_role_required("leader")
+def api_scan(team, role):
+    """開一局。掃到已作答過的題目就開唯讀的結果頁，不會重來一次。"""
+    qid = str((request.get_json(silent=True) or {}).get("id", "")).strip().upper()
+    question = QUESTIONS.get(qid)
     if not question:
         return jsonify(error="找不到這個題目代碼"), 404
     with _lock:
-        record = _data["teams"].get(str(team), {}).get(question["id"])
-    return jsonify(_question_payload(question, record))
+        answered = qid in _data["teams"].get(str(team), {})
+        choices = list(question["choices"])
+        if RANDOM_CHOICES and not answered:
+            random.shuffle(choices)
+        _live[str(team)] = {
+            "phase": "revealed" if answered else "voting",
+            "qid": qid,
+            "choices": choices,
+            "votes": {},
+        }
+        return jsonify(_state(team, role))
 
 
-@app.post("/api/answer")
-def api_answer():
-    team, _role = _current()
-    if not team:
-        return jsonify(error="請重新登入"), 401
-
-    body = request.get_json(silent=True) or {}
-    question = QUESTIONS.get(str(body.get("id", "")).strip().upper())
-    if not question:
-        return jsonify(error="找不到這個題目代碼"), 404
-    choice = str(body.get("choice", "")).strip()
-    if choice not in question["choices"]:
-        return jsonify(error="不是這題的選項"), 400
-
-    qid = question["id"]
+@app.post("/api/vote")
+@_role_required("member")
+def api_vote(team, role):
+    """記下這台裝置選了什麼。不送出，最後一次點的算數。"""
+    device = _device()
+    if not device:
+        return jsonify(error="缺少裝置識別，請重新整理"), 400
+    choice = str((request.get_json(silent=True) or {}).get("choice", "")).strip()
     with _lock:
+        live = _round(team)
+        if live["phase"] != "voting":
+            return jsonify(error="現在不是投票時間"), 409
+        if choice not in live["choices"]:
+            return jsonify(error="不是這題的選項"), 400
+        live["votes"][device] = choice
+        _touch(team, role, device)
+        return jsonify(_state(team, role, device))
+
+
+@app.post("/api/submit")
+@_role_required("leader")
+def api_submit(team, role):
+    """送出最高票。平手時 body 要帶 choice，由隊輔指定送哪一個。"""
+    pick = str((request.get_json(silent=True) or {}).get("choice", "")).strip()
+    with _lock:
+        live = _round(team)
+        if live["phase"] == "revealed":
+            return jsonify(_state(team, role))          # 另一台隊輔已經送出了
+        if live["phase"] != "voting":
+            return jsonify(error="現在沒有進行中的投票"), 409
+
+        counts, winners = _tally(live)
+        if not winners:
+            return jsonify(error="還沒有人投票"), 409
+        if len(winners) > 1 and pick not in winners:
+            return jsonify(error="票數平手，請點一個要送出的選項"), 409
+        chosen = pick if len(winners) > 1 else winners[0]
+
+        qid = live["qid"]
+        question = QUESTIONS[qid]
         answers = _data["teams"].setdefault(str(team), {})
-        record = answers.get(qid)
-        already = record is not None
-        if not already:
-            # 檢查與寫入都在鎖內，所以同隊同時送出時只有第一筆算數
-            record = {"choice": choice, "correct": choice == question["answer"], "at": time.time()}
-            answers[qid] = record
+        if qid not in answers:
+            # 檢查與寫入都在鎖內，所以兩台隊輔同時送出時只有第一筆算數
+            answers[qid] = {
+                "choice": chosen,
+                "correct": chosen == question["answer"],
+                "at": time.time(),
+                "votes": {c: counts[c] for c in live["choices"] if counts.get(c)},
+            }
             _flush()
-        return jsonify(
-            already=already,
-            choice=record["choice"],
-            correct=record["correct"],
-            answer=question["answer"],
-            earned=question["points"] if record["correct"] else 0,
-            points=question["points"],
-            **_state(team),
-        )
+        live["phase"] = "revealed"
+        live["votes"] = {}
+        return jsonify(_state(team, role))
+
+
+@app.post("/api/close")
+@_role_required("leader")
+def api_close(team, role):
+    """回到等待題目。投票中按下去就是取消這一局，票全部丟掉、不留紀錄。"""
+    with _lock:
+        _live[str(team)] = _blank_round()
+        return jsonify(_state(team, role))
 
 
 @app.post("/reset")
@@ -466,6 +583,8 @@ def api_reset():
         cleared = sum(len(answers) for answers in _data["teams"].values())
         backup = _backup_data()
         _data["teams"] = {}
+        _live.clear()
+        _seen.clear()
         _flush()
     print(f"[重置] 清空 {cleared} 筆作答紀錄" + (f"，已備份為 {backup}" if backup else ""))
     return jsonify(ok=True, cleared=cleared, backup=backup)

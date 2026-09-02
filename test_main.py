@@ -24,6 +24,14 @@ os.environ["SHOW_SCORES_IN_MENU"] = "1"
 import main  # noqa: E402
 
 # questions.yaml 裡長這樣（image_url 是 _check_question 產出的，不是輸入欄位）
+LEADER = {"X-Token": "leader-one"}
+MEMBER = {"X-Token": "member-one", "X-Device": "d0"}
+
+
+def device(headers, name):
+    return {**headers, "X-Device": name}
+
+
 QUESTION = {
     "id": "TESTQ",
     "content": "測試題",
@@ -42,6 +50,9 @@ def setup():
     main.QUESTIONS = {"TESTQ": {**QUESTION, "image_url": None}}
     main.DATA_FILE = Path(tempfile.mkdtemp()) / "data.json"
     main._data = {"teams": {}}
+    main._live = {}
+    main._seen = {}
+    main.RANDOM_CHOICES = False
     main._started = True
     return main.app.test_client()
 
@@ -128,28 +139,145 @@ def test_image_extension_is_whitelisted():
 
 def test_endpoints_require_a_token():
     client = setup()
-    assert client.get("/api/state").status_code == 401
-    assert client.get("/api/question/TESTQ").status_code == 401
-    assert client.post("/api/answer", json={"id": "TESTQ", "choice": "對"}).status_code == 401
+    for method, path in (
+        ("get", "/api/state"), ("post", "/api/scan"),
+        ("post", "/api/vote"), ("post", "/api/submit"), ("post", "/api/close"),
+    ):
+        assert getattr(client, method)(path).status_code == 401, path
     assert client.post("/api/login", json={"token": "wrong"}).status_code == 401
 
 
-def test_answer_is_not_leaked_before_answering():
+def test_roles_cannot_use_each_others_endpoints():
     client = setup()
-    payload = client.get("/api/question/TESTQ", headers={"X-Token": "member-one"}).get_json()
-    assert payload["answered"] is False
-    assert "answer" not in payload, "未作答時不可以回傳正解"
-    assert sorted(payload["choices"]) == ["對", "錯"]
+    leader, member = LEADER, MEMBER
+    assert client.post("/api/scan", json={"id": "TESTQ"}, headers=member).status_code == 403
+    assert client.post("/api/submit", headers=member).status_code == 403
+    assert client.post("/api/close", headers=member).status_code == 403
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=leader)
+    assert client.post("/api/vote", json={"choice": "對"}, headers=leader).status_code == 403
 
 
-def test_wrong_choice_is_rejected():
+def test_answer_is_not_leaked_while_voting():
     client = setup()
-    response = client.post(
-        "/api/answer",
-        json={"id": "TESTQ", "choice": "不是選項"},
-        headers={"X-Token": "member-one"},
-    )
-    assert response.status_code == 400
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    for who in (LEADER, MEMBER):
+        state = client.get("/api/state", headers=who).get_json()
+        assert state["phase"] == "voting"
+        assert "answer" not in state["question"], who   # answered 是進度，不是正解
+        assert "result" not in state, who
+
+
+def test_members_never_see_the_tally():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    state = client.get("/api/state", headers=device(MEMBER, "d1")).get_json()
+    assert "counts" not in state, "隊員不可以看到各選項票數"
+    assert state["my_choice"] == "對"
+    assert state["voted"] == 1
+    assert client.get("/api/state", headers=LEADER).get_json()["counts"]["對"] == 1
+
+
+def test_choice_order_is_stable_across_polls():
+    """選項在開局時洗一次就固定，不能每次輪詢都重排。"""
+    client = setup()
+    main.RANDOM_CHOICES = True
+    main.QUESTIONS["TESTQ"]["choices"] = list("ABCDEFGH")
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    orders = {
+        tuple(client.get("/api/state", headers=who).get_json()["question"]["choices"])
+        for who in (LEADER, MEMBER, device(MEMBER, "d2"))
+        for _ in range(5)
+    }
+    assert len(orders) == 1, f"選項順序在輪詢之間跳動了：{orders}"
+
+
+def test_last_vote_wins_and_counts_are_live():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1"))
+    counts = client.get("/api/state", headers=LEADER).get_json()["counts"]
+    assert counts == {"對": 1, "錯": 1}, counts
+
+
+def test_submit_needs_votes_and_sends_the_top_one():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    assert client.post("/api/submit", headers=LEADER).status_code == 409, "零票不可以送出"
+
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d3"))
+    body = client.post("/api/submit", headers=LEADER).get_json()
+    assert body["phase"] == "revealed"
+    assert body["result"]["choice"] == "對"
+    assert body["result"]["correct"] is True
+    assert body["result"]["votes"] == {"對": 2, "錯": 1}
+    assert main._score(1) == 2
+
+
+def test_a_tie_needs_the_leader_to_pick():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d2"))
+
+    assert client.get("/api/state", headers=LEADER).get_json()["tie"] == ["對", "錯"]
+    assert client.post("/api/submit", headers=LEADER).status_code == 409, "平手不可以自動送"
+    assert client.post("/api/submit", json={"choice": "沒這個"}, headers=LEADER).status_code == 409
+    body = client.post("/api/submit", json={"choice": "錯"}, headers=LEADER).get_json()
+    assert body["result"]["choice"] == "錯"
+    assert body["result"]["correct"] is False
+
+
+def test_close_discards_votes_without_recording():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    body = client.post("/api/close", headers=LEADER).get_json()
+    assert body["phase"] == "idle"
+    assert main._data["teams"].get("1", {}) == {}, "取消不可以留下作答紀錄"
+    assert client.get("/api/state", headers=MEMBER).get_json()["phase"] == "idle"
+
+
+def test_rescanning_an_answered_question_is_read_only():
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/submit", headers=LEADER)
+    client.post("/api/close", headers=LEADER)
+
+    body = client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER).get_json()
+    assert body["phase"] == "revealed"
+    assert body["result"]["votes"] == {"對": 1}
+    assert client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1")).status_code == 409
+    assert main._score(1) == 2, "重掃不可以改變分數"
+
+
+def test_voting_outside_a_round_is_rejected():
+    client = setup()
+    assert client.post("/api/vote", json={"choice": "對"}, headers=MEMBER).status_code == 409
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    assert client.post("/api/vote", json={"choice": "不是選項"}, headers=MEMBER).status_code == 400
+
+
+def test_scan_rejects_unknown_question():
+    client = setup()
+    assert client.post("/api/scan", json={"id": "NOPE1"}, headers=LEADER).status_code == 404
+    assert client.get("/api/state", headers=LEADER).get_json()["phase"] == "idle"
+
+
+def test_online_count_only_counts_recent_members():
+    client = setup()
+    client.get("/api/state", headers=device(MEMBER, "d1"))
+    client.get("/api/state", headers=device(MEMBER, "d2"))
+    client.get("/api/state", headers=LEADER)
+    assert client.get("/api/state", headers=LEADER).get_json()["online"] == 2, "隊輔不算在線隊員"
+
+    main._seen["1"]["d1"] -= main.ONLINE_TIMEOUT + 1
+    assert client.get("/api/state", headers=LEADER).get_json()["online"] == 1
 
 
 def test_startup_guard_blocks_requests():
@@ -161,22 +289,20 @@ def test_startup_guard_blocks_requests():
         main._started = True
 
 
-# ---------------------------------------------------------------- 併發
-
-def test_only_the_first_answer_counts():
-    """同隊兩台手機同時送出不同答案，只有第一筆算數，分數不會加兩次。"""
+def test_only_the_first_submit_counts():
+    """兩台隊輔同時按送出，只有第一筆算數。"""
     setup()
-    header = {"X-Token": "member-one"}
+    main.app.test_client().post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    for i, choice in enumerate(("對", "對", "錯", "錯")):
+        main.app.test_client().post("/api/vote", json={"choice": choice}, headers=device(MEMBER, f"d{i}"))
+
     results = []
     barrier = threading.Barrier(2)
 
-    def submit(choice):
-        # 每條執行緒要自己的 test_client，Flask 的不是 thread-safe
-        client = main.app.test_client()
+    def submit(pick):
+        client = main.app.test_client()   # Flask 的 test_client 不是 thread-safe
         barrier.wait()
-        results.append(
-            client.post("/api/answer", json={"id": "TESTQ", "choice": choice}, headers=header).get_json()
-        )
+        results.append(client.post("/api/submit", json={"choice": pick}, headers=LEADER).get_json())
 
     threads = [threading.Thread(target=submit, args=(c,)) for c in ("對", "錯")]
     for t in threads:
@@ -185,15 +311,16 @@ def test_only_the_first_answer_counts():
         t.join()
 
     assert len(main._data["teams"]["1"]) == 1, main._data
-    assert sum(1 for r in results if r["already"]) == 1, "應該剛好一筆是重複的"
     stored = main._data["teams"]["1"]["TESTQ"]["choice"]
-    assert all(r["choice"] == stored for r in results), "兩邊看到的答案要一致"
+    assert all(r["result"]["choice"] == stored for r in results), "兩台看到的答案要一致"
     assert main._score(1) == (2 if stored == "對" else 0)
 
 
-def test_reset_clears_scores_and_keeps_a_backup():
+def test_reset_clears_scores_and_live_rounds():
     client = setup()
-    client.post("/api/answer", json={"id": "TESTQ", "choice": "對"}, headers={"X-Token": "member-one"})
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/submit", headers=LEADER)
     assert main._score(1) == 2
 
     assert client.post("/reset").status_code == 401
@@ -202,6 +329,7 @@ def test_reset_clears_scores_and_keeps_a_backup():
     body = client.post("/reset", headers={"X-Reset-Token": "token-reset"}).get_json()
     assert body["cleared"] == 1
     assert main._score(1) == 0
+    assert main._live == {} and main._seen == {}, "重置也要清掉進行中的局"
     assert (main.DATA_FILE.parent / body["backup"]).exists(), "清空前要留備份"
 
 
