@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """把登入 token 與題目 ID 產成 QR-Code，輸出到 qr/。
 
-登入 QR 編的是完整網址，所以用手機內建相機掃也能直接登入；
-題目 QR 編的是純五碼代碼，由網站內建掃描器讀取。
+登入 QR 分兩疊：leader_N 給隊輔（掃題目、看票數、送出），member_N 給隊員
+（只投票）。兩者編的都是完整網址，用手機內建相機掃也能直接登入。
+題目 QR 編的是純五碼代碼，只有隊輔掃得動。
 
 一律用 segno.make_qr()。segno.make() 遇到五碼這種短資料會挑 Micro QR
 (M2-M，只有一個定位點)，而 jsQR 根本不支援 Micro QR，貼出去會掃不動。
@@ -17,7 +18,7 @@ from pathlib import Path
 import segno
 from fpdf import FPDF
 
-from main import QUESTIONS, TOKENS
+from main import LEADER_TOKENS, MEMBER_TOKENS, QUESTIONS
 
 OUT_DIR = Path(__file__).parent / "qr"
 PDF_PATH = OUT_DIR / "qrcodes.pdf"
@@ -45,10 +46,15 @@ def build_items():
     site = os.getenv("SITE_URL", "https://treasure.ntust.org").rstrip("/")
     # 備註只印 token 前 4 碼：夠對照哪張是哪隊，又不會把整把 token 留在
     # 終端機捲動紀錄或 `make_qr.py > build.log` 裡。完整值在 .env
-    items = [
-        (f"TEAM {number}", f"{site}/?token={token}", f"login_{number}", f"{token[:4]}…")
-        for number, token in enumerate(TOKENS, 1)
-    ]
+    items = []
+    for label, prefix, tokens in (
+        ("LEADER", "leader", LEADER_TOKENS),
+        ("TEAM", "member", MEMBER_TOKENS),
+    ):
+        items += [
+            (f"{label} {number}", f"{site}/?token={token}", f"{prefix}_{number}", f"{token[:4]}…")
+            for number, token in enumerate(tokens, 1)
+        ]
     items += [(qid, qid, qid, q["content"][:30]) for qid, q in QUESTIONS.items()]
     return items
 
@@ -137,7 +143,11 @@ def main():
     args = parser.parse_args()
 
     items = build_items()
-    print(f"\n{len(TOKENS)} 張登入 QR（完整網址）+ {len(QUESTIONS)} 張題目 QR（五碼）")
+    print(
+        f"\n{len(LEADER_TOKENS)} 張隊輔 + {len(MEMBER_TOKENS)} 張隊員登入 QR（完整網址）"
+        f" + {len(QUESTIONS)} 張題目 QR（五碼）"
+    )
+    print("隊輔那疊千萬別跟隊員的混在一起 —— 拿到隊輔 QR 的人可以代替全隊送出答案\n")
     if args.pdf:
         write_pdf(items)
     else:
