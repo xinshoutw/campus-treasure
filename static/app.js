@@ -641,7 +641,7 @@ el.qSubmit.addEventListener("click", () => {
   if (busy) return;
   el.qSubmit.disabled = true;   // 送出可能被伺服器擋（票數變了），所以只給按下去的回饋
   // 送出的一定是按鈕上寫的那個。伺服器會重算並比對，對不上就擋下來
-  act(() => post("/api/submit", { choice: shownWinner }));
+  act(() => post("/api/submit", { choice: shownWinner, id: state.question.id }));
 });
 
 // 取消與下一題在伺服器端一定成功，直接切畫面不用等

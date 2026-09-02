@@ -218,6 +218,38 @@ def test_submit_needs_votes_and_sends_the_top_one():
     assert main._score(1) == 2
 
 
+def test_a_stale_submit_cannot_land_on_the_next_question():
+    """兩台隊輔：一台已經走到下一題，另一台的舊送出不可以落在新題目上。"""
+    client = setup()
+    main.QUESTIONS["OTHER"] = {**QUESTION, "id": "OTHER", "image_url": None}
+
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
+    client.post("/api/submit", json={"choice": "對", "id": "TESTQ"}, headers=LEADER)
+    client.post("/api/close", headers=LEADER)
+    client.post("/api/scan", json={"id": "OTHER"}, headers=LEADER)   # 已經在第二題了
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1"))
+
+    stale = client.post("/api/submit", json={"choice": "錯", "id": "TESTQ"}, headers=LEADER)
+    assert stale.status_code == 409, "舊題目的送出不可以落在新題目上"
+    assert "OTHER" not in main._data["teams"]["1"], main._data
+
+
+def test_a_scan_cannot_silently_discard_votes():
+    """兩台隊輔：一台重掃時另一台的隊員已經投了票，不可以無聲丟掉。"""
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    for d in ("d1", "d2", "d3"):
+        client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, d))
+
+    again = client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    assert again.status_code == 409, "有票在的時候重掃要先擋下來"
+    assert client.get("/api/state", headers=LEADER).get_json()["voted"] == 3, "票不可以被清掉"
+
+    client.post("/api/close", headers=LEADER)                       # 先取消就可以重來
+    assert client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER).status_code == 200
+
+
 def test_submit_refuses_a_choice_that_is_no_longer_winning():
     """隊輔的票數最多過期 1 秒。按鈕上寫什麼就送什麼，對不上就擋下來重看。"""
     client = setup()

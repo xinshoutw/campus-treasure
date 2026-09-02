@@ -506,6 +506,12 @@ def api_scan(team, role):
     if not question:
         return jsonify(error="找不到這個題目代碼"), 404
     with _lock:
+        live = _round(team)
+        # 隊輔 token 不限台數，所以第二台可能在別人的局進行到一半時掃了東西。
+        # 直接蓋掉會把已經投的票無聲丟光 —— 要丟得先按取消。
+        if live["phase"] == "voting" and live["votes"]:
+            return jsonify(error="這一題已經有人投票了，要換題請先按取消"), 409
+
         answered = qid in _data["teams"].get(str(team), {})
         choices = list(question["choices"])
         if RANDOM_CHOICES and not answered:
@@ -549,9 +555,15 @@ def api_submit(team, role):
     所以送出當下要重算並比對：對不上就擋下來，讓他看新的票數再按一次。伺服器
     自己挑一個送出去的話，紙上寫「送出『對』」卻記成「錯」，沒有人會發現。
     """
-    pick = str((request.get_json(silent=True) or {}).get("choice", "")).strip()
+    body = request.get_json(silent=True) or {}
+    pick = str(body.get("choice", "")).strip()
+    for_qid = str(body.get("id", "")).strip().upper()
     with _lock:
         live = _round(team)
+        # 另一台隊輔可能已經把這一局送出、關掉、開了新的一題。沒有這個檢查的話，
+        # 這台的舊送出會落在新題目上，用一票隨手的票決定那題的分數。
+        if for_qid and live["qid"] and for_qid != live["qid"]:
+            return jsonify(error="題目已經換了，請看新的題目"), 409
         if live["phase"] == "revealed":
             return jsonify(_state(team, role))          # 另一台隊輔已經送出了
         if live["phase"] != "voting":
