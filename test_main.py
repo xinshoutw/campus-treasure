@@ -316,6 +316,26 @@ def test_only_the_first_submit_counts():
     assert main._score(1) == (2 if stored == "對" else 0)
 
 
+def test_a_second_submit_never_overwrites_the_record():
+    """白箱：就算局的狀態被弄回投票中，已記錄的答案也不能被改掉。
+
+    正常流程走不到這裡（phase 會先擋下），但守的是計分，不能只靠上游。
+    """
+    client = setup()
+    client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
+    client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1"))
+    client.post("/api/submit", headers=LEADER)
+    assert main._score(1) == 0
+
+    live = main._live["1"]
+    live["phase"] = "voting"
+    live["votes"] = {"d1": "對"}
+    client.post("/api/submit", headers=LEADER)
+
+    assert main._data["teams"]["1"]["TESTQ"]["choice"] == "錯", "已記錄的答案被覆寫了"
+    assert main._score(1) == 0
+
+
 def test_reset_clears_scores_and_live_rounds():
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
