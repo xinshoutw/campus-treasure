@@ -1,7 +1,7 @@
 [project]
-name = "compus-treasure"
+name = "campus-treasure"
 version = "0.1.0"
-description = "Add your description here"
+description = "NTUST campus treasure hunt: scan-to-login, scan-to-open-question, scored answers"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
