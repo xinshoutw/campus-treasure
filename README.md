@@ -20,6 +20,15 @@ nginx 反向代理到 `HOST:PORT`（預設 `192.168.10.101:20001`）。TLS 由�
 > **相機只能在 HTTPS 或 localhost 下使用。** 直接用 `http://192.168.10.101:20001` 從手機連會拿不到相機，
 > 一定要走你的 `https://treasure.ntust.org`。
 
+## 測試
+
+```bash
+uv run test_main.py
+```
+
+不吃測試框架，只用 assert。涵蓋題庫驗證、同隊併發只算一筆、圖片快取的副檔名
+白名單、端點權限、`/reset` 備份。不會碰到正式的 `data.json`。
+
 ## 產生 QR-Code
 
 ```bash
