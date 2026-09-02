@@ -23,13 +23,21 @@ nginx 反向代理到 `HOST:PORT`（預設 `192.168.10.101:20001`）。TLS 由�
 ## 產生 QR-Code
 
 ```bash
-uv run make_qr.py
+uv run make_qr.py          # 一個 QR 一張 PNG
+uv run make_qr.py --pdf    # A4 多頁 PDF，每頁 2x4 共 8 個，含裁切線
 ```
 
 輸出到 `qr/`：
 
 - `login_1.png` … `login_6.png` — 登入用，編碼完整網址，手機內建相機掃也能登入
 - `ABCDE.png` … — 題目用，編碼五碼代碼，由網站內建掃描器讀取
+- `qrcodes.pdf` — `--pdf` 模式的輸出，QR 是向量圖，放大列印不會有鋸齒
+
+一律用 `segno.make_qr()`，**不能用 `segno.make()`** —— 後者遇到五碼這種短資料會挑
+Micro QR（`M2-M`，只有一個定位點），而 jsQR 不支援 Micro QR，貼出去會完全掃不動。
+
+PDF 上的標籤刻意只用 ASCII（`TEAM 1`、`ABCDE`），這樣不必嵌中文字型。哪張貼紙對應
+哪一題，看終端機印出來的對照表。
 
 ## 設定
 

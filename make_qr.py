@@ -1,40 +1,137 @@
 #!/usr/bin/env python3
-"""把登入 token 與題目 ID 產成 QR-Code PNG，輸出到 qr/。
+"""把登入 token 與題目 ID 產成 QR-Code，輸出到 qr/。
 
 登入 QR 編的是完整網址，所以用手機內建相機掃也能直接登入；
 題目 QR 編的是純五碼代碼，由網站內建掃描器讀取。
 
+一律用 segno.make_qr()。segno.make() 遇到五碼這種短資料會挑 Micro QR
+(M2-M，只有一個定位點)，而 jsQR 根本不支援 Micro QR，貼出去會掃不動。
+
 匯入 main 會順帶跑一次題庫驗證 —— 題庫有錯就不會產出半套貼紙。
 """
 
+import argparse
 import os
 from pathlib import Path
 
 import segno
+from fpdf import FPDF
 
 from main import QUESTIONS, TOKENS
 
 OUT_DIR = Path(__file__).parent / "qr"
-SCALE = 20
-BORDER = 2
+PDF_PATH = OUT_DIR / "qrcodes.pdf"
+
+PNG_SCALE = 20
+QUIET_ZONE = 4  # 標準 QR 的靜區寬度（模組數）
+
+# A4 直式，每頁 2 欄 x 4 列，單位 mm
+PAGE_W, PAGE_H = 210.0, 297.0
+MARGIN = 12.0
+COLS, ROWS = 2, 4
+CELL_W = (PAGE_W - 2 * MARGIN) / COLS
+CELL_H = (PAGE_H - 2 * MARGIN) / ROWS
+QR_MM = 46.0
+LABEL_H = 8.0
+LABEL_PT = 15
+
+
+def build_items():
+    """回傳 (標籤, QR 內容, 檔名, 備註) 的清單。
+
+    標籤是印在紙上的字，刻意只用 ASCII，這樣 PDF 不必嵌中文字型。
+    備註只出現在終端機，用來對照哪張貼紙是哪一題。
+    """
+    site = os.getenv("SITE_URL", "https://treasure.ntust.org").rstrip("/")
+    items = [
+        (f"TEAM {number}", f"{site}/?token={token}", f"login_{number}", token)
+        for number, token in enumerate(TOKENS, 1)
+    ]
+    items += [(qid, qid, qid, q["content"][:30]) for qid, q in QUESTIONS.items()]
+    return items
+
+
+def write_pngs(items):
+    OUT_DIR.mkdir(exist_ok=True)
+    for label, payload, name, note in items:
+        segno.make_qr(payload, error="m").save(
+            OUT_DIR / f"{name}.png", scale=PNG_SCALE, border=QUIET_ZONE
+        )
+        print(f"  qr/{name}.png   {label:<8} {note}")
+    print(f"\n完成：{len(items)} 張 PNG → {OUT_DIR.name}/\n")
+
+
+def draw_qr(pdf, code, x, y, size):
+    """把 QR 畫成向量矩形，列印時不會有點陣邊緣。同列連續的暗模組合併成一條。"""
+    matrix = [list(row) for row in code.matrix_iter(scale=1, border=QUIET_ZONE)]
+    module = size / len(matrix)
+    pdf.set_fill_color(0, 0, 0)
+    for row_index, row in enumerate(matrix):
+        col = 0
+        while col < len(row):
+            if not row[col]:
+                col += 1
+                continue
+            start = col
+            while col < len(row) and row[col]:
+                col += 1
+            pdf.rect(
+                x + start * module,
+                y + row_index * module,
+                (col - start) * module,
+                module,
+                style="F",
+            )
+
+
+def write_pdf(items):
+    OUT_DIR.mkdir(exist_ok=True)
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(False)
+    pdf.set_font("Helvetica", "B", LABEL_PT)
+
+    per_page = COLS * ROWS
+    for index, (label, payload, _, note) in enumerate(items):
+        slot = index % per_page
+        if slot == 0:
+            pdf.add_page()
+        cell_x = MARGIN + (slot % COLS) * CELL_W
+        cell_y = MARGIN + (slot // COLS) * CELL_H
+
+        # 裁切輔助線，剪貼紙時對得準
+        pdf.set_draw_color(190, 190, 190)
+        pdf.set_line_width(0.1)
+        pdf.set_dash_pattern(dash=1, gap=1.5)
+        pdf.rect(cell_x + 1, cell_y + 1, CELL_W - 2, CELL_H - 2)
+        pdf.set_dash_pattern()
+
+        top = cell_y + (CELL_H - QR_MM - LABEL_H) / 2
+        draw_qr(pdf, segno.make_qr(payload, error="m"), cell_x + (CELL_W - QR_MM) / 2, top, QR_MM)
+
+        pdf.set_xy(cell_x, top + QR_MM + 1)
+        pdf.cell(CELL_W, LABEL_H, label, align="C")
+        print(f"  第 {pdf.page_no()} 頁   {label:<8} {note}")
+
+    pdf.output(str(PDF_PATH))
+    pages = -(-len(items) // per_page)
+    print(f"\n完成：{len(items)} 個 QR / {pages} 頁 → {PDF_PATH.relative_to(PDF_PATH.parent.parent)}\n")
 
 
 def main():
-    site = os.getenv("SITE_URL", "https://treasure.ntust.org").rstrip("/")
-    OUT_DIR.mkdir(exist_ok=True)
+    parser = argparse.ArgumentParser(description="產生登入與題目 QR-Code")
+    parser.add_argument(
+        "--pdf",
+        action="store_true",
+        help="輸出 A4 多頁 PDF（每頁 2x4 共 8 個，含裁切線），不產 PNG",
+    )
+    args = parser.parse_args()
 
-    print(f"\n登入 QR（編碼完整網址，內建相機也掃得動）")
-    for number, token in enumerate(TOKENS, 1):
-        url = f"{site}/?token={token}"
-        segno.make(url, error="m").save(OUT_DIR / f"login_{number}.png", scale=SCALE, border=BORDER)
-        print(f"  qr/login_{number}.png   第 {number} 隊   {token}")
-
-    print(f"\n題目 QR（編碼五碼代碼）")
-    for qid, question in QUESTIONS.items():
-        segno.make(qid, error="m").save(OUT_DIR / f"{qid}.png", scale=SCALE, border=BORDER)
-        print(f"  qr/{qid}.png   {question['content'][:28]}")
-
-    print(f"\n完成：{len(TOKENS)} 張登入 + {len(QUESTIONS)} 張題目 → {OUT_DIR.name}/\n")
+    items = build_items()
+    print(f"\n{len(TOKENS)} 張登入 QR（完整網址）+ {len(QUESTIONS)} 張題目 QR（五碼）")
+    if args.pdf:
+        write_pdf(items)
+    else:
+        write_pngs(items)
 
 
 if __name__ == "__main__":
