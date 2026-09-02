@@ -317,6 +317,8 @@ async function openQuestion(id) {
     renderQuestion(data);
     setMode("question");
   } catch (err) {
+    // 不清掉的話，再多打一個字會被 slice 回同一組壞代碼、又送一次
+    el.input.value = "";
     onApiError(err);
   } finally {
     busy = false;
