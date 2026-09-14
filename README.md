@@ -32,7 +32,7 @@
 - [uv](https://docs.astral.sh/uv/)
 - Node（僅跑前端測試時需要）
 
-### 跑起來
+### 執行
 
 ```bash
 git clone https://github.com/xinshoutw/campus-treasure.git
