@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""最小回歸測試：`uv run test_main.py`。
+"""Minimal regression tests: `uv run test_main.py`.
 
-只用 assert，不吃測試框架。涵蓋的是壞掉會讓活動當天出事的東西：題庫驗證、
-同隊併發只算一筆、圖片快取的副檔名白名單、端點權限。
+Just assert, no test framework. Covers the things that would ruin the event if
+they broke: question validation, one record per team under concurrency, the
+image cache extension whitelist, endpoint permissions.
 
-環境變數在 import main 之前就設好，load_dotenv 不會覆蓋既有的值，所以這支
-測試不依賴 .env，也不會碰到正式的 data.json。
+Environment variables are set before importing main, and load_dotenv does not
+override existing values, so these tests need no .env and never touch the real
+data.json.
 """
 
 import http.server
@@ -23,7 +25,7 @@ os.environ["SHOW_SCORES_IN_MENU"] = "1"
 
 import main  # noqa: E402
 
-# questions.yaml 裡長這樣（image_url 是 _check_question 產出的，不是輸入欄位）
+# Shaped like questions.yaml (image_url is produced by _check_question, not an input field)
 LEADER = {"X-Token": "leader-one"}
 MEMBER = {"X-Token": "member-one", "X-Device": "d0"}
 
@@ -43,7 +45,9 @@ QUESTION = {
 
 
 def setup():
-    """把全域狀態換成測試用的，尤其是 DATA_FILE，別碰到正式資料。"""
+    """Swaps global state for test state, DATA_FILE above all, so the real data
+    is never touched.
+    """
     main.MEMBER_TOKENS = ["member-one", "member-two"]
     main.LEADER_TOKENS = ["leader-one", "leader-two"]
     main.RESET_TOKEN = "token-reset"
@@ -57,7 +61,7 @@ def setup():
     return main.app.test_client()
 
 
-# ---------------------------------------------------------------- 題庫驗證
+# ------------------------------------------------------- Question validation
 
 def test_valid_question_passes():
     errors, parsed = main._check_question(1, dict(QUESTION), {})
@@ -89,10 +93,12 @@ def test_duplicate_id_is_reported():
     assert any("重複" in e for e in errors), errors
 
 
-# ---------------------------------------------------------------- 圖片快取
+# ------------------------------------------------------------- Image cache
 
 def test_image_extension_is_whitelisted():
-    """副檔名不能由遠端的 Content-Type 決定，否則會生出離譜的檔名。"""
+    """The extension must not come from the remote Content-Type, or absurd
+    filenames get created.
+    """
     served = {
         "/png": ("image/png", b"\x89PNG\r\n\x1a\n"),
         "/traversal": ("image/../../evil.py", b"pwned"),
@@ -135,7 +141,7 @@ def test_image_extension_is_whitelisted():
         server.shutdown()
 
 
-# ---------------------------------------------------------------- 端點
+# ---------------------------------------------------------------- Endpoints
 
 def test_endpoints_require_a_token():
     client = setup()
@@ -163,7 +169,7 @@ def test_answer_is_not_leaked_while_voting():
     for who in (LEADER, MEMBER):
         state = client.get("/api/state", headers=who).get_json()
         assert state["phase"] == "voting"
-        assert "answer" not in state["question"], who   # answered 是進度，不是正解
+        assert "answer" not in state["question"], who   # answered is progress, not the answer
         assert "result" not in state, who
 
 
@@ -179,7 +185,9 @@ def test_members_never_see_the_tally():
 
 
 def test_choice_order_is_stable_across_polls():
-    """選項在開局時洗一次就固定，不能每次輪詢都重排。"""
+    """Choices are shuffled once when the round opens and then fixed; they must
+    not be reordered on every poll.
+    """
     client = setup()
     main.RANDOM_CHOICES = True
     main.QUESTIONS["TESTQ"]["choices"] = list("ABCDEFGH")
@@ -219,7 +227,9 @@ def test_submit_needs_votes_and_sends_the_top_one():
 
 
 def test_a_stale_submit_cannot_land_on_the_next_question():
-    """兩台隊輔：一台已經走到下一題，另一台的舊送出不可以落在新題目上。"""
+    """Two leader phones: one has moved on, and the other's stale submit must not
+    land on the new question.
+    """
     client = setup()
     main.QUESTIONS["OTHER"] = {**QUESTION, "id": "OTHER", "image_url": None}
 
@@ -227,7 +237,7 @@ def test_a_stale_submit_cannot_land_on_the_next_question():
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
     client.post("/api/submit", json={"choice": "對", "id": "TESTQ"}, headers=LEADER)
     client.post("/api/close", headers=LEADER)
-    client.post("/api/scan", json={"id": "OTHER"}, headers=LEADER)   # 已經在第二題了
+    client.post("/api/scan", json={"id": "OTHER"}, headers=LEADER)   # On the second question now
     client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d1"))
 
     stale = client.post("/api/submit", json={"choice": "錯", "id": "TESTQ"}, headers=LEADER)
@@ -236,7 +246,9 @@ def test_a_stale_submit_cannot_land_on_the_next_question():
 
 
 def test_a_scan_cannot_silently_discard_votes():
-    """兩台隊輔：一台重掃時另一台的隊員已經投了票，不可以無聲丟掉。"""
+    """Two leader phones: one rescans while the other's members have already
+    voted, and those votes must not be dropped silently.
+    """
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     for d in ("d1", "d2", "d3"):
@@ -246,20 +258,22 @@ def test_a_scan_cannot_silently_discard_votes():
     assert again.status_code == 409, "有票在的時候重掃要先擋下來"
     assert client.get("/api/state", headers=LEADER).get_json()["voted"] == 3, "票不可以被清掉"
 
-    client.post("/api/close", headers=LEADER)                       # 先取消就可以重來
+    client.post("/api/close", headers=LEADER)                       # Discarding first allows a retry
     assert client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER).status_code == 200
 
 
 def test_submit_refuses_a_choice_that_is_no_longer_winning():
-    """隊輔的票數最多過期 1 秒。按鈕上寫什麼就送什麼，對不上就擋下來重看。"""
+    """The leader's tally can be up to a poll interval stale. Whatever the button
+    says is what gets submitted; a mismatch is rejected so they look again.
+    """
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))
     client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d3"))
-    # 隊輔螢幕上此刻是「送出『對』」
+    # The leader's screen now reads "submit the right answer"
 
-    for d in ("d1", "d2"):                       # 按下去之前有人改票，「錯」變成最高票
+    for d in ("d1", "d2"):                       # Votes change before the press, the wrong answer takes the lead
         client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, d))
 
     stale = client.post("/api/submit", json={"choice": "對"}, headers=LEADER)
@@ -271,14 +285,16 @@ def test_submit_refuses_a_choice_that_is_no_longer_winning():
 
 
 def test_submit_keeps_the_leaders_tie_pick():
-    """平手時隊輔明確點了一個，之後票數變動也不可以把它換掉。"""
+    """On a tie the leader picked one explicitly, and a later change in the tally
+    must not swap it out.
+    """
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d1"))
     client.post("/api/vote", json={"choice": "錯"}, headers=device(MEMBER, "d2"))
-    # 平手，隊輔點了「錯」
+    # Tied, and the leader picked the wrong answer
 
-    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))  # 「對」獨走
+    client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, "d2"))  # The right answer pulls ahead
     stale = client.post("/api/submit", json={"choice": "錯"}, headers=LEADER)
     assert stale.status_code == 409, "隊輔指定的選項不可以被無聲換掉"
     assert main._score(1) == 0
@@ -336,12 +352,14 @@ def test_scan_rejects_unknown_question():
 
 
 def test_online_never_undercounts_people_who_have_voted():
-    """投完票就鎖屏是常態。投過票的人一定算在場，不然會出現「已投 3 / 在線 0」。"""
+    """Voting and then locking the phone is normal. Anyone who voted must count as
+    present, or the leader sees "3 voted, 0 online".
+    """
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     for d in ("d1", "d2", "d3"):
         client.post("/api/vote", json={"choice": "對"}, headers=device(MEMBER, d))
-        main._seen["1"][d] -= main.ONLINE_TIMEOUT + 1      # 三支手機都鎖屏了
+        main._seen["1"][d] -= main.ONLINE_TIMEOUT + 1      # All three phones locked
 
     state = client.get("/api/state", headers=LEADER).get_json()
     assert state["voted"] == 3
@@ -369,7 +387,7 @@ def test_startup_guard_blocks_requests():
 
 
 def test_only_the_first_submit_counts():
-    """兩台隊輔同時按送出，只有第一筆算數。"""
+    """Two leader phones submit at once, only the first one counts."""
     setup()
     main.app.test_client().post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
     for i, choice in enumerate(("對", "對", "錯", "錯")):
@@ -379,7 +397,7 @@ def test_only_the_first_submit_counts():
     barrier = threading.Barrier(2)
 
     def submit(pick):
-        client = main.app.test_client()   # Flask 的 test_client 不是 thread-safe
+        client = main.app.test_client()   # Flask test_client is not thread-safe
         barrier.wait()
         results.append(client.post("/api/submit", json={"choice": pick}, headers=LEADER).get_json())
 
@@ -396,9 +414,11 @@ def test_only_the_first_submit_counts():
 
 
 def test_a_second_submit_never_overwrites_the_record():
-    """白箱：就算局的狀態被弄回投票中，已記錄的答案也不能被改掉。
+    """White box: even if the round is forced back to voting, a recorded answer
+    must not change.
 
-    正常流程走不到這裡（phase 會先擋下），但守的是計分，不能只靠上游。
+    The normal flow never gets here, phase blocks it first, but this guards the
+    scoring and cannot rely on upstream alone.
     """
     client = setup()
     client.post("/api/scan", json={"id": "TESTQ"}, headers=LEADER)
@@ -433,7 +453,7 @@ def test_reset_clears_scores_and_live_rounds():
 
 
 def test_config_rejects_bad_token_sets():
-    """啟動時就要擋下來的 .env 錯誤。"""
+    """.env mistakes that have to be caught at startup."""
     cases = {
         "少了 LEADER_KEY": {"MEMBER_KEY": "a;b", "LEADER_KEY": ""},
         "少了 MEMBER_KEY": {"MEMBER_KEY": "", "LEADER_KEY": "a;b"},

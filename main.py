@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""校園尋寶 — Flask 後端。
+"""Campus treasure hunt, Flask backend.
 
-單 process 執行（waitress，多執行緒）。所有狀態放在記憶體，每次作答
-在鎖內整份寫回 data.json 並原子換檔，重啟不掉分。
+Runs as a single process (waitress, multi-threaded). All state lives in memory;
+every answer rewrites data.json in full inside the lock and swaps it in
+atomically, so a restart never loses points.
 """
 
 import functools
@@ -35,11 +36,11 @@ MIN_CHOICES, MAX_CHOICES = 2, 10
 QUESTION_KEYS = {"id", "content", "answer", "choices", "image", "points"}
 FETCH_UA = "Mozilla/5.0 (compatible; treasure-hunt/1.0)"
 FETCH_TIMEOUT = 20
-ONLINE_TIMEOUT = 30   # 秒。隊員每秒輪詢一次；設太短的話，切去看個訊息就被當成離線
+ONLINE_TIMEOUT = 30   # Seconds. Too short and glancing at a message marks a member offline.
 
 
 # --------------------------------------------------------------------------
-# 設定
+# Config
 # --------------------------------------------------------------------------
 
 def _die(errors, header):
@@ -62,10 +63,11 @@ def _token_list(name):
 
 
 def load_config():
-    """兩排 token，順序即隊號：LEADER_KEY 是隊輔，MEMBER_KEY 是隊員。
+    """Two rows of tokens, position is the team number: LEADER_KEY, then MEMBER_KEY.
 
-    12 把必須互不相同 —— 一把 token 同時是隊輔又是隊員的話，角色判定會看
-    誰先比中，行為由清單順序決定，這種東西活動當天沒有人 debug 得出來。
+    All 12 must be distinct. A token that is both a leader and a member resolves
+    to whichever list matches first, so behaviour depends on list order, and
+    nobody is going to debug that on the day of the event.
     """
     load_dotenv(BASE / ".env")
     members = _token_list("MEMBER_KEY")
@@ -97,7 +99,7 @@ def load_config():
 
 
 # --------------------------------------------------------------------------
-# 題庫：啟動時嚴格驗證，有錯就不啟動
+# Question bank: validated strictly at startup, any error refuses to boot
 # --------------------------------------------------------------------------
 
 def _check_question(index, item, seen):
@@ -196,11 +198,12 @@ def load_questions():
 
 
 # --------------------------------------------------------------------------
-# 圖片快取：啟動時把遠端圖抓下來，活動當天不依賴外部圖床
+# Image cache: pull remote images at startup so the event needs no image host
 # --------------------------------------------------------------------------
 
-# 副檔名一律查表決定。曾經是「拿 Content-Type 的後半段當副檔名」，但那個字串
-# 完全由遠端圖床控制，回一個 image/../../x 就會生出離譜的檔名讓啟動整個掛掉。
+# Extensions always come from this table. This used to take the second half of
+# Content-Type verbatim, but that string is fully controlled by the remote host:
+# image/../../x would produce an absurd filename and take the whole startup down.
 _CONTENT_TYPE_EXT = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -243,7 +246,7 @@ def cache_images(questions):
     for question in todo:
         try:
             path, cached = _fetch_image(question["image"])
-        except Exception as exc:  # 下載失敗一律視為致命：破圖的題目沒有意義
+        except Exception as exc:  # A failed download is fatal: a broken image is a broken question
             errors.append(f"{question['id']}: 下載失敗 {question['image']}\n      {exc}")
             print(f"  {question['id']} → 失敗：{exc}")
             continue
@@ -254,26 +257,29 @@ def cache_images(questions):
 
 
 # --------------------------------------------------------------------------
-# 儲存：記憶體為主，每次作答在鎖內整份寫回 + 原子換檔
+# Storage: memory first, every answer rewrites in full inside the lock, then
+# an atomic rename
 # --------------------------------------------------------------------------
 
 _lock = threading.Lock()
 _data = {"teams": {}}
 
-# 進行中的一局，只存記憶體：重啟就重來，隊輔重掃一次即可。已送出的答案在
-# _data 裡，跟以前一樣重啟不掉分。
-_live = {}   # 隊號(str) -> {"phase", "qid", "choices", "votes": {device: choice}}
-_seen = {}   # 隊號(str) -> {device: monotonic 時戳}
+# The open round, memory only: a restart drops it and the leader rescans.
+# Submitted answers live in _data, so points still survive a restart.
+_live = {}   # team number (str) -> {"phase", "qid", "choices", "votes": {device: choice}}
+_seen = {}   # team number (str) -> {device: monotonic timestamp}
 
 
-# 每次真正改到狀態就 +1。前端靠它丟掉「伺服器早就算好、下行拖慢才送達」的
-# 過期回應 —— 那種回應會把隊員剛投的票從畫面上抹掉。
-# _seen 的更新不算，否則每次輪詢都會 +1，就沒有東西是過期的了。
+# Incremented whenever state actually changes. The frontend uses it to drop
+# stale responses, the ones the server computed long ago that a slow downlink
+# only just delivered, which would wipe a member's fresh vote off the screen.
+# _seen updates do not count, or every poll would bump it and nothing would
+# ever look stale.
 _version = 0
 
 
 def _bump():
-    """呼叫者必須持有 _lock。"""
+    """Caller must hold _lock."""
     global _version
     _version += 1
 
@@ -297,7 +303,9 @@ def load_data():
 
 
 def _backup_data():
-    """呼叫者必須持有 _lock。把現有 data.json 挪成帶時間戳的備份，回傳檔名。"""
+    """Caller must hold _lock. Moves data.json aside to a timestamped backup and
+    returns its name.
+    """
     if not DATA_FILE.exists():
         return None
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -311,7 +319,7 @@ def _backup_data():
 
 
 def _flush():
-    """呼叫者必須持有 _lock。"""
+    """Caller must hold _lock."""
     tmp = DATA_FILE.with_name(DATA_FILE.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(_data, fh, ensure_ascii=False, indent=2)
@@ -321,7 +329,9 @@ def _flush():
 
 
 def _score(team):
-    """分數即時從作答紀錄算出，不存冗餘欄位。呼叫者必須持有 _lock。"""
+    """Computed from the answer log on the fly, no redundant stored field.
+    Caller must hold _lock.
+    """
     answers = _data["teams"].get(str(team), {})
     return sum(
         QUESTIONS[qid]["points"]
@@ -331,15 +341,17 @@ def _score(team):
 
 
 def _round(team):
-    """呼叫者必須持有 _lock。"""
+    """Caller must hold _lock."""
     return _live.setdefault(str(team), _blank_round())
 
 
 def _online(team):
-    """呼叫者必須持有 _lock。順便把逾時的裝置清掉，不然數字只會往上長。
+    """Caller must hold _lock. Also drops timed-out devices, or the count only grows.
 
-    投過票的人一律算在場。投完就鎖屏是常態，手機一鎖就停止輪詢，光看
-    _seen 的話隊輔會看到「已投 3 / 在線 0」——票明明在，人明明就站在旁邊。
+    Anyone who has voted counts as present. Voting and then locking the phone is
+    normal, and a locked phone stops polling, so going by _seen alone the leader
+    would see "3 voted, 0 online" with the votes right there and the people
+    standing next to them.
     """
     now = time.monotonic()
     seen = _seen.setdefault(str(team), {})
@@ -351,9 +363,10 @@ def _online(team):
 
 
 def _tally(live):
-    """呼叫者必須持有 _lock。回傳 (各選項票數, 最高票的選項)。
+    """Caller must hold _lock. Returns (counts per choice, the leading choices).
 
-    最高票依 live["choices"] 的順序排，所以平手清單對每個人都一樣。
+    Winners follow the order of live["choices"], so a tie list looks identical
+    to everyone.
     """
     counts = Counter(live["votes"].values())
     top = max(counts.values(), default=0)
@@ -362,7 +375,9 @@ def _tally(live):
 
 
 def _state(team, role, device=None):
-    """呼叫者必須持有 _lock。隊員拿到的東西永遠不含各選項票數與正解。"""
+    """Caller must hold _lock. What a member receives never includes the tally
+    or the correct answer.
+    """
     answers = _data["teams"].get(str(team), {})
     live = _round(team)
     state = {
@@ -375,7 +390,7 @@ def _state(team, role, device=None):
         "score": _score(team),
         "answered": sum(1 for qid in answers if qid in QUESTIONS),
         "total": len(QUESTIONS),
-        "online": _online(team),   # 隊輔掃題目前就想知道人到齊了沒
+        "online": _online(team),   # The leader wants to know everyone is there before scanning
         "v": _version,
     }
     if live["phase"] == "idle":
@@ -390,7 +405,8 @@ def _state(team, role, device=None):
     }
 
     if live["phase"] == "voting":
-        # 選項順序是開局時洗好存下來的：每次輪詢重洗的話根本點不到
+        # Choice order was shuffled once when the round opened; reshuffling on
+        # every poll would make the choices impossible to tap
         state["question"]["choices"] = live["choices"]
         state["voted"] = len(live["votes"])
         if role == "member":
@@ -407,7 +423,7 @@ def _state(team, role, device=None):
         "correct": record.get("correct", False),
         "answer": question["answer"],
         "earned": question["points"] if record.get("correct") else 0,
-        "votes": record.get("votes", {}),   # 舊的紀錄沒有這欄，給空的
+        "votes": record.get("votes", {}),   # Older records lack this field, hand back an empty one
     }
     return state
 
@@ -418,10 +434,12 @@ def _state(team, role, device=None):
 
 app = Flask(__name__)
 
-# 載入 data.json 與快取題目圖片都放在 __main__ 裡（見檔尾），這樣 make_qr.py
-# 匯入本模組時不會被拖去下載圖片、也不需要網路。代價是 `gunicorn main:app`
-# 這類跑法會拿到空的 _data，第一筆作答就把既有的 data.json 整份蓋掉 ——
-# 與其安靜地把全場分數清光，不如整個不服務。
+# Loading data.json and caching question images both happen in __main__ (see the
+# bottom of the file), so importing this module from make_qr.py does not drag in
+# downloads or need network access. The cost is that running it some other way,
+# say `gunicorn main:app`, would get an empty _data and the first answer would
+# overwrite the existing data.json. Better to refuse to serve at all than to
+# silently wipe the whole event's scores.
 _started = False
 
 
@@ -432,12 +450,12 @@ def _require_startup():
 
 
 def _token_matches(supplied, known):
-    # 用 bytes 比對：compare_digest 對含非 ASCII 的 str 會直接丟 TypeError
+    # Compare bytes: compare_digest raises TypeError on a str holding non-ASCII
     return secrets.compare_digest(supplied.encode("utf-8"), known.encode("utf-8"))
 
 
 def _identify_token(token):
-    """回傳 (隊號, 角色) 或 (None, None)。角色是 "leader" 或 "member"。"""
+    """Returns (team number, role), or (None, None). Role is "leader" or "member"."""
     if not token:
         return None, None
     for role, known_tokens in (("leader", LEADER_TOKENS), ("member", MEMBER_TOKENS)):
@@ -456,7 +474,9 @@ def _device():
 
 
 def _role_required(role=None):
-    """把「登入了沒、是不是對的角色」擋在 view 外面，view 只收 (team, role)。"""
+    """Keeps the logged-in and right-role checks outside the view, which only
+    ever receives (team, role).
+    """
     def wrap(view):
         @functools.wraps(view)
         def inner(*args, **kwargs):
@@ -471,7 +491,7 @@ def _role_required(role=None):
 
 
 def _touch(team, role, device):
-    """呼叫者必須持有 _lock。只有隊員算進在線人數，隊輔不算。"""
+    """Caller must hold _lock. Only members count towards the online tally."""
     if role == "member" and device:
         _seen.setdefault(str(team), {})[device] = time.monotonic()
 
@@ -505,15 +525,18 @@ def api_state(team, role):
 @app.post("/api/scan")
 @_role_required("leader")
 def api_scan(team, role):
-    """開一局。掃到已作答過的題目就開唯讀的結果頁，不會重來一次。"""
+    """Opens a round. Scanning an already answered question opens a read-only
+    result instead of starting over.
+    """
     qid = str((request.get_json(silent=True) or {}).get("id", "")).strip().upper()
     question = QUESTIONS.get(qid)
     if not question:
         return jsonify(error="找不到這個題目代碼"), 404
     with _lock:
         live = _round(team)
-        # 隊輔 token 不限台數，所以第二台可能在別人的局進行到一半時掃了東西。
-        # 直接蓋掉會把已經投的票無聲丟光 —— 要丟得先按取消。
+        # Leader tokens are not device-limited, so a second phone may scan
+        # midway through someone else's round. Overwriting would silently throw
+        # away votes already cast; discarding has to be deliberate.
         if live["phase"] == "voting" and live["votes"]:
             return jsonify(error="這一題已經有人投票了，要換題請先按取消"), 409
 
@@ -534,7 +557,7 @@ def api_scan(team, role):
 @app.post("/api/vote")
 @_role_required("member")
 def api_vote(team, role):
-    """記下這台裝置選了什麼。不送出，最後一次點的算數。"""
+    """Records what this device picked. Nothing is submitted; the last tap wins."""
     device = _device()
     if not device:
         return jsonify(error="缺少裝置識別，請重新整理"), 400
@@ -554,23 +577,26 @@ def api_vote(team, role):
 @app.post("/api/submit")
 @_role_required("leader")
 def api_submit(team, role):
-    """送出隊輔按鈕上顯示的那個選項。
+    """Submits the choice the leader's button was showing.
 
-    body 的 choice 是隊輔螢幕上寫的答案。他看到的票數最多過期一個輪詢週期，
-    所以送出當下要重算並比對：對不上就擋下來，讓他看新的票數再按一次。伺服器
-    自己挑一個送出去的話，紙上寫「送出『對』」卻記成「錯」，沒有人會發現。
+    The choice in the body is what the leader's screen said. Their tally can be
+    up to one poll interval stale, so it is recomputed and compared at submit
+    time: a mismatch is rejected and they press again against fresh numbers.
+    If the server picked one itself, the button could read "submit 'right'" and
+    record "wrong", and nobody would ever notice.
     """
     body = request.get_json(silent=True) or {}
     pick = str(body.get("choice", "")).strip()
     for_qid = str(body.get("id", "")).strip().upper()
     with _lock:
         live = _round(team)
-        # 另一台隊輔可能已經把這一局送出、關掉、開了新的一題。沒有這個檢查的話，
-        # 這台的舊送出會落在新題目上，用一票隨手的票決定那題的分數。
+        # Another leader phone may have already submitted, closed, and opened a
+        # new question. Without this check, this phone's stale submit would land
+        # on the new question and settle it on one incidental vote.
         if for_qid and live["qid"] and for_qid != live["qid"]:
             return jsonify(error="題目已經換了，請看新的題目"), 409
         if live["phase"] == "revealed":
-            return jsonify(_state(team, role))          # 另一台隊輔已經送出了
+            return jsonify(_state(team, role))          # Another leader already submitted
         if live["phase"] != "voting":
             return jsonify(error="現在沒有進行中的投票"), 409
 
@@ -587,7 +613,8 @@ def api_submit(team, role):
         question = QUESTIONS[qid]
         answers = _data["teams"].setdefault(str(team), {})
         if qid not in answers:
-            # 檢查與寫入都在鎖內，所以兩台隊輔同時送出時只有第一筆算數
+            # Check and write are both inside the lock, so when two leaders
+            # submit at once only the first one counts
             answers[qid] = {
                 "choice": chosen,
                 "correct": chosen == question["answer"],
@@ -604,7 +631,9 @@ def api_submit(team, role):
 @app.post("/api/close")
 @_role_required("leader")
 def api_close(team, role):
-    """回到等待題目。投票中按下去就是取消這一局，票全部丟掉、不留紀錄。"""
+    """Back to waiting. Pressed mid-vote this discards the round: every vote is
+    thrown away and nothing is recorded.
+    """
     with _lock:
         _live[str(team)] = _blank_round()
         _bump()
@@ -613,7 +642,7 @@ def api_close(team, role):
 
 @app.post("/reset")
 def api_reset():
-    """清空所有隊伍的分數與作答紀錄。清掉之前會先把 data.json 備份起來。"""
+    """Clears every team's score and answer log. data.json is backed up first."""
     if not RESET_TOKEN:
         return jsonify(error="未設定 RESET_TOKEN，此端點停用"), 404
     supplied = request.headers.get("X-Reset-Token", "").strip()

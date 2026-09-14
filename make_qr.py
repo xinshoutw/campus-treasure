@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""把登入 token 與題目 ID 產成 QR-Code，輸出到 qr/。
+"""Turns login tokens and question ids into QR codes under qr/.
 
-登入 QR 分兩疊：leader_N 給隊輔（掃題目、看票數、送出），member_N 給隊員
-（只投票）。兩者編的都是完整網址，用手機內建相機掃也能直接登入。
-題目 QR 編的是純五碼代碼，只有隊輔掃得動。
+Login QR codes come in two stacks: leader_N for leaders (scan questions, see the
+tally, submit) and member_N for members (vote only). Both encode a full URL, so
+the phone's built-in camera app logs you straight in. Question QR codes encode
+the bare five-letter code and only leaders can scan them.
 
-一律用 segno.make_qr()。segno.make() 遇到五碼這種短資料會挑 Micro QR
-(M2-M，只有一個定位點)，而 jsQR 根本不支援 Micro QR，貼出去會掃不動。
+Always segno.make_qr(). Given payloads as short as five characters segno.make()
+picks a Micro QR (M2-M, a single finder pattern), and jsQR has no Micro QR
+support at all, so the printed code would be unscannable.
 
-匯入 main 會順帶跑一次題庫驗證 —— 題庫有錯就不會產出半套貼紙。
+Importing main also runs question validation, so a broken bank never yields half
+a set of stickers.
 """
 
 import argparse
@@ -24,9 +27,9 @@ OUT_DIR = Path(__file__).parent / "qr"
 PDF_PATH = OUT_DIR / "qrcodes.pdf"
 
 PNG_SCALE = 20
-QUIET_ZONE = 4  # 標準 QR 的靜區寬度（模組數）
+QUIET_ZONE = 4  # Standard QR quiet zone width, in modules
 
-# A4 直式，每頁 2 欄 x 4 列，單位 mm
+# A4 portrait, 2 columns x 4 rows per page, in mm
 PAGE_W, PAGE_H = 210.0, 297.0
 MARGIN = 12.0
 COLS, ROWS = 2, 4
@@ -38,14 +41,16 @@ LABEL_PT = 15
 
 
 def build_items():
-    """回傳 (標籤, QR 內容, 檔名, 備註) 的清單。
+    """Returns a list of (label, QR payload, filename, note).
 
-    標籤是印在紙上的字，刻意只用 ASCII，這樣 PDF 不必嵌中文字型。
-    備註只出現在終端機，用來對照哪張貼紙是哪一題。
+    The label is what gets printed, deliberately ASCII-only so the PDF needs no
+    embedded CJK font. The note only shows up in the terminal, to match a sticker
+    to its question.
     """
     site = os.getenv("SITE_URL", "https://treasure.ntust.org").rstrip("/")
-    # 備註只印 token 前 4 碼：夠對照哪張是哪隊，又不會把整把 token 留在
-    # 終端機捲動紀錄或 `make_qr.py > build.log` 裡。完整值在 .env
+    # The note prints only the first 4 characters of a token: enough to tell the
+    # stacks apart, without leaving whole tokens in terminal scrollback or in a
+    # `make_qr.py > build.log`. The full values stay in .env
     items = []
     for label, prefix, tokens in (
         ("LEADER", "leader", LEADER_TOKENS),
@@ -62,7 +67,8 @@ def build_items():
 def write_pngs(items):
     OUT_DIR.mkdir(exist_ok=True)
 
-    # 從 questions.yaml 刪掉的題目會留下孤兒 PNG，不清掉就有機會被印出來貼上牆
+    # A question deleted from questions.yaml leaves an orphan PNG behind, and an
+    # uncleaned one can still get printed and taped to a wall
     keep = {f"{name}.png" for _, _, name, _ in items}
     for stale in sorted(OUT_DIR.glob("*.png")):
         if stale.name not in keep:
@@ -78,7 +84,9 @@ def write_pngs(items):
 
 
 def draw_qr(pdf, code, x, y, size):
-    """把 QR 畫成向量矩形，列印時不會有點陣邊緣。同列連續的暗模組合併成一條。"""
+    """Draws the QR as vector rectangles, so printing has no bitmap edges. Runs of
+    dark modules in a row are merged into one rectangle.
+    """
     matrix = [list(row) for row in code.matrix_iter(scale=1, border=QUIET_ZONE)]
     module = size / len(matrix)
     pdf.set_fill_color(0, 0, 0)
@@ -114,7 +122,7 @@ def write_pdf(items):
         cell_x = MARGIN + (slot % COLS) * CELL_W
         cell_y = MARGIN + (slot // COLS) * CELL_H
 
-        # 裁切輔助線，剪貼紙時對得準
+        # Cut guides, so the stickers line up when trimmed
         pdf.set_draw_color(190, 190, 190)
         pdf.set_line_width(0.1)
         pdf.set_dash_pattern(dash=1, gap=1.5)
