@@ -13,9 +13,12 @@ data.json.
 import http.server
 import os
 import socketserver
+import sys
 import tempfile
 import threading
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 os.environ["MEMBER_KEY"] = "member-one;member-two"
 os.environ["LEADER_KEY"] = "leader-one;leader-two"

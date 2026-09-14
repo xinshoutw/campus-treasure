@@ -27,8 +27,9 @@ from flask import Flask, jsonify, render_template, request
 from waitress import serve
 
 BASE = Path(__file__).parent
-DATA_FILE = BASE / "data.json"
-QUESTIONS_FILE = BASE / "questions.yaml"
+ROOT = BASE.parent
+DATA_FILE = ROOT / "data.json"
+QUESTIONS_FILE = ROOT / "questions.yaml"
 CACHE_DIR = BASE / "static" / "cache"
 
 ID_RE = re.compile(r"^[A-Z]{5}$")
@@ -69,7 +70,7 @@ def load_config():
     to whichever list matches first, so behaviour depends on list order, and
     nobody is going to debug that on the day of the event.
     """
-    load_dotenv(BASE / ".env")
+    load_dotenv(ROOT / ".env")
     members = _token_list("MEMBER_KEY")
     leaders = _token_list("LEADER_KEY")
     reset_token = os.getenv("RESET_TOKEN", "").strip()

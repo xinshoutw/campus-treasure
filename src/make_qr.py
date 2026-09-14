@@ -23,7 +23,7 @@ from fpdf import FPDF
 
 from main import LEADER_TOKENS, MEMBER_TOKENS, QUESTIONS
 
-OUT_DIR = Path(__file__).parent / "qr"
+OUT_DIR = Path(__file__).parent.parent / "qr"
 PDF_PATH = OUT_DIR / "qrcodes.pdf"
 
 PNG_SCALE = 20

@@ -39,7 +39,7 @@ git clone https://github.com/xinshoutw/campus-treasure.git
 cd campus-treasure
 
 uv sync
-uv run main.py
+uv run src/main.py
 ```
 
 1. Validates `.env` (token uniqueness)
@@ -69,8 +69,8 @@ The `questions.yaml` fields are documented at the top of that file.
 ## Generating QR Codes
 
 ```bash
-uv run make_qr.py          # one PNG per QR
-uv run make_qr.py --pdf    # multi-page A4 PDF, 2x4 per page, with cut lines
+uv run src/make_qr.py      # one PNG per QR
+uv run src/make_qr.py --pdf # multi-page A4 PDF, 2x4 per page, with cut lines
 ```
 
 Output lands in `qr/`:
@@ -87,8 +87,8 @@ Output lands in `qr/`:
 ## Tests
 
 ```bash
-uv run test_main.py    # backend
-node test_web.cjs      # frontend
+uv run tests/test_main.py    # backend
+node tests/test_web.cjs      # frontend
 ```
 
 <br/>
@@ -107,18 +107,18 @@ node test_web.cjs      # frontend
 ### Layout
 
 ```
-main.py                config and question validation, state machine, API, data.json I/O
-make_qr.py             login and question QR codes (PNG or A4 PDF)
-questions.yaml         question bank, fields documented at the top
-templates/index.html   single page, all four screens toggled with hidden
-static/app.js          frontend: login, camera, polling, voting, submitting
-static/style.css       design tokens and layout
-static/jsQR.js         vendored QR decoder, minified
-static/cache/          question images downloaded at startup (gitignored)
-qr/                    make_qr.py output (gitignored)
-test_main.py           backend tests
-test_web.cjs           frontend end-to-end tests
-data.json              answer log, created at runtime (gitignored)
+src/main.py                config and question validation, state machine, API, data.json I/O
+src/make_qr.py             login and question QR codes (PNG or A4 PDF)
+src/templates/index.html   single page, all four screens toggled with hidden
+src/static/app.js          frontend: login, camera, polling, voting, submitting
+src/static/style.css       design tokens and layout
+src/static/jsQR.js         vendored QR decoder, minified
+src/static/cache/          question images downloaded at startup (gitignored)
+tests/test_main.py         backend tests
+tests/test_web.cjs         frontend end-to-end tests
+questions.yaml             question bank, fields documented at the top
+qr/                        make_qr.py output (gitignored)
+data.json                  answer log, created at runtime (gitignored)
 ```
 
 <br/>
@@ -137,7 +137,7 @@ Backs `data.json` up in the same directory, then clears every team's score and a
 
 Before opening a PR:
 
-1. `uv run test_main.py` and `node test_web.cjs` pass
+1. `uv run tests/test_main.py` and `node tests/test_web.cjs` pass
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 3. Branches named `feat/your-feature` or `fix/your-fix`
 4. No emoji

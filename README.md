@@ -39,7 +39,7 @@ git clone https://github.com/xinshoutw/campus-treasure.git
 cd campus-treasure
 
 uv sync
-uv run main.py
+uv run src/main.py
 ```
 
 1. 驗證 `.env`（Token 唯一性）
@@ -69,8 +69,8 @@ uv run main.py
 ## 產生 QR-Code
 
 ```bash
-uv run make_qr.py          # 一個 QR 一張 PNG
-uv run make_qr.py --pdf    # A4 多頁 PDF，每頁 2x4 共 8 個，含裁切線
+uv run src/make_qr.py      # 一個 QR 一張 PNG
+uv run src/make_qr.py --pdf # A4 多頁 PDF，每頁 2x4 共 8 個，含裁切線
 ```
 
 輸出到 `qr/`：
@@ -87,8 +87,8 @@ uv run make_qr.py --pdf    # A4 多頁 PDF，每頁 2x4 共 8 個，含裁切線
 ## 測試
 
 ```bash
-uv run test_main.py    # 後端
-node test_web.cjs      # 前端
+uv run tests/test_main.py    # 後端
+node tests/test_web.cjs      # 前端
 ```
 
 <br/>
@@ -107,18 +107,18 @@ node test_web.cjs      # 前端
 ### 專案結構
 
 ```
-main.py                設定與題庫驗證、狀態機、API、data.json 讀寫
-make_qr.py             產生登入與題目 QR（PNG 或 A4 PDF）
-questions.yaml         題庫，欄位說明在檔案開頭
-templates/index.html   單頁 HTML，四種畫面都在裡面用 hidden 切換
-static/app.js          前端：登入、相機、輪詢、投票、送出
-static/style.css       設計 token 與版面
-static/jsQR.js         vendored QR 解碼器，已 minify
-static/cache/          啟動時下載的題目圖片（gitignore）
-qr/                    make_qr.py 的輸出（gitignore）
-test_main.py           後端測試
-test_web.cjs           前端端到端測試
-data.json              作答紀錄，執行期產生（gitignore）
+src/main.py                設定與題庫驗證、狀態機、API、data.json 讀寫
+src/make_qr.py             產生登入與題目 QR（PNG 或 A4 PDF）
+src/templates/index.html   單頁 HTML，四種畫面都在裡面用 hidden 切換
+src/static/app.js          前端：登入、相機、輪詢、投票、送出
+src/static/style.css       設計 token 與版面
+src/static/jsQR.js         vendored QR 解碼器，已 minify
+src/static/cache/          啟動時下載的題目圖片（gitignore）
+tests/test_main.py         後端測試
+tests/test_web.cjs         前端端到端測試
+questions.yaml             題庫，欄位說明在檔案開頭
+qr/                        make_qr.py 的輸出（gitignore）
+data.json                  作答紀錄，執行期產生（gitignore）
 ```
 
 <br/>
@@ -137,7 +137,7 @@ curl -X POST https://treasure.ntust.org/reset -H "X-Reset-Token: $RESET_TOKEN"
 
 送 PR 之前：
 
-1. `uv run test_main.py` 與 `node test_web.cjs` 通過
+1. `uv run tests/test_main.py` 與 `node tests/test_web.cjs` 通過
 2. commit 遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hant/v1.0.0/)
 3. 以 `feat/your-feature` 或 `fix/your-fix` 命名分支
 4. 不使用 Emoji

@@ -13,6 +13,6 @@ data.json.tmp
 data.*.json
 
 # 產生物
-static/cache/
+src/static/cache/
 qr/
 .DS_Store

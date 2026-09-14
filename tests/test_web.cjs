@@ -27,7 +27,10 @@ const PORT = 20000 + Math.floor(Math.random() * 9000);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 
-const SRC = fs.readFileSync(path.join(__dirname, "static", "app.js"), "utf8");
+const ROOT = path.resolve(__dirname, "..");
+const APP_DIR = path.join(ROOT, "src");
+
+const SRC = fs.readFileSync(path.join(APP_DIR, "static", "app.js"), "utf8");
 
 function makeElement(id) {
   const listeners = {};
@@ -223,7 +226,7 @@ class Phone {
 const BOOT = `
 import os, sys, tempfile
 from pathlib import Path
-sys.path.insert(0, ${JSON.stringify(__dirname)})
+sys.path.insert(0, ${JSON.stringify(APP_DIR)})
 import main
 from waitress import serve
 main.MEMBER_TOKENS = [${JSON.stringify(MEMBER)}, "test-member-2"]
@@ -238,7 +241,7 @@ serve(main.app, host="127.0.0.1", port=${PORT}, threads=8)
 
 async function boot() {
   const server = spawn("uv", ["run", "--offline", "python", "-c", BOOT],
-    { cwd: __dirname, stdio: ["ignore", "ignore", "pipe"] });
+    { cwd: ROOT, stdio: ["ignore", "ignore", "pipe"] });
   let stderr = "";
   server.stderr.on("data", (d) => { stderr += d; });
   for (let i = 0; i < 100; i++) {
@@ -468,7 +471,7 @@ check("按下一題後，鏡頭裡還是同一張貼紙也不會被彈回結果�
 check("CSS 沒有蓋掉 hidden 屬性", async () => {
   // The DOM stub only looks at el.hidden and could never catch this, so this is
   // a static check
-  const css = fs.readFileSync(path.join(__dirname, "static", "style.css"), "utf8");
+  const css = fs.readFileSync(path.join(APP_DIR, "static", "style.css"), "utf8");
   assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
     "少了 [hidden] 的保險規則：.ghost 的 display: block 會蓋過瀏覽器的 "
     + "[hidden]，隊員就會看到「取消這一題」");
