@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 "use strict";
 
-/* 前端端到端測試：`node test_web.cjs`（要有 node 與 uv）。
+/* Frontend end-to-end tests: `node test_web.cjs` (needs node and uv).
  *
- * 真正的 static/app.js 跑在一個最小 DOM stub 裡，打一個真正起起來的 Flask
- * 伺服器。每個 Phone 是獨立的 vm context = 一支手機，有自己的 localStorage
- * 與 device id，所以「隊輔 + 三台隊員」是真的四個 client 在互動。
+ * The real static/app.js runs inside a minimal DOM stub against a Flask server
+ * that actually boots. Each Phone is its own vm context, so it is one phone with
+ * its own localStorage and device id, which makes "a leader plus three members"
+ * four real clients talking to each other.
  *
- * 伺服器用臨時的 DATA_FILE 與臨時的 token，不會碰到 .env 或正式的 data.json。
- * 相機在 Node 裡一定開不起來，所以走的是手動輸入題目代碼那條路徑。
+ * The server uses a temporary DATA_FILE and temporary tokens, so it never
+ * touches .env or the real data.json. A camera can never open under Node, so
+ * these take the manual question-code path.
  */
 
 const assert = require("assert");
@@ -49,37 +51,37 @@ function makeElement(id) {
   return el;
 }
 
-const LIVE_PHONES = [];   // check 結束要全部關掉，不然輪詢會一直累積下去
+const LIVE_PHONES = [];   // Closed after every check, or polling piles up
 
 class Phone {
   constructor(name, base, seed) {
     this.name = name;
-    this.delay = 0;        // 人為的網路延遲，毫秒
+    this.delay = 0;        // Artificial network delay, ms
     this.inflight = 0;
     this.maxInflight = 0;
-    this.sent = [];        // 送出去的每一個 path，用來抓多餘的請求
-    this.qr = null;        // 鏡頭裡現在對著哪張 QR
-    this.camera = false;   // 這支手機有沒有相機
-    this.streams = 0;      // 總共開過幾條 stream
-    this.liveTracks = 0;   // 還沒被關掉的 track
+    this.sent = [];        // Every path sent, to catch redundant requests
+    this.qr = null;        // Which QR the lens is currently on
+    this.camera = false;   // Whether this phone has a camera
+    this.streams = 0;      // How many streams have been opened in total
+    this.liveTracks = 0;   // Tracks not yet stopped
     this.frame = 0;
-    this.frames = 0;       // 掃描迴圈跑了幾幀
-    this.hang = false;     // 請求永遠不回來
-    this.slowPath = null;  // 只有這個 path 會被延遲
-    this.camDelay = 0;     // getUserMedia 要多久才回來
+    this.frames = 0;       // Frames the scan loop has run
+    this.hang = false;     // Requests never come back
+    this.slowPath = null;  // Only this path gets delayed
+    this.camDelay = 0;     // How long getUserMedia takes to return
     this.els = {};
     this.timers = [];
     LIVE_PHONES.push(this);
-    // __ 開頭的是給 harness 的設定，不是 storage 的內容
+    // Keys starting with __ configure the harness, they are not storage contents
     const opts = seed || {};
     const store = new Map(Object.entries(opts).filter(([k]) => !k.startsWith("__")));
     const session = (this.session = opts.__session || new Map());
-    this.privateMode = Boolean(opts.__private);   // 要在腳本跑起來之前就生效
+    this.privateMode = Boolean(opts.__private);   // Has to take effect before the script runs
     const sandbox = {
       console,
       setTimeout, clearTimeout, clearInterval,
       setInterval: (fn, ms) => { const id = setInterval(fn, ms); this.timers.push(id); return id; },
-      // 掃描迴圈：讓 tick 真的一幀一幀跑，才測得到重複掃描的去重
+      // Scan loop: tick has to run frame by frame for rescan deduplication to be testable
       requestAnimationFrame: (fn) => {
         this.frames++;
         const id = setTimeout(() => fn(this.frame += 20), 5);
@@ -115,17 +117,19 @@ class Phone {
                { kind: "videoinput", deviceId: "cam2", label: "前鏡頭" }] : []),
         },
       },
-      // 鏡頭裡「看到」什麼由測試決定：this.qr 有值就每幀都解得到它
+      // The test decides what the lens sees: a non-null this.qr decodes every frame
       jsQR: () => (this.qr ? { data: this.qr } : null),
       fetch: (path, opts) => {
         this.sent.push(path);
         this.inflight++;
         this.maxInflight = Math.max(this.maxInflight, this.inflight);
         const done = () => { this.inflight--; };
-        // 延遲加在回應之後：真實的慢下行是伺服器早就算完了，只是回應晚到。
-        // 加在請求之前會變成「伺服器晚點才算」，測不到過期回應的問題。
+        // The delay goes after the response: a real slow downlink means the
+        // server finished long ago and only the reply is late. Delaying the
+        // request instead would mean "the server computed later", which does
+        // not reproduce the stale-response problem at all.
         if (this.hang) {
-          // 請求永遠不回來，但要尊重 AbortSignal
+          // Never returns, but still honours AbortSignal
           return new Promise((_, reject) => {
             const sig = opts && opts.signal;
             if (sig) sig.addEventListener("abort", () => { done(); reject(sig.reason || new Error("aborted")); });
@@ -151,10 +155,10 @@ class Phone {
     vm.runInContext(SRC, sandbox, { filename: "app.js" });
   }
 
-  /** 停掉輪詢。不關的話上一個 check 的手機會一直打伺服器 */
+  /** Stops polling. Without it the previous check's phones keep hitting the server */
   close() { this.timers.forEach(clearInterval); this.timers = []; }
 
-  /** 讓 video 看起來有畫面，掃描迴圈才會動；code 就是鏡頭裡那張 QR */
+  /** Makes video look like it has a picture so the scan loop runs; code is the QR in frame */
   aimAt(code) {
     const v = this.el("video");
     v.videoWidth = 640; v.videoHeight = 640; v.readyState = 4;
@@ -162,7 +166,7 @@ class Phone {
   }
 
   el(id) { return this.els[id]; }
-  /** 等待所有 in-flight 的 promise 收斂 */
+  /** Waits for every in-flight promise to settle */
   settle() { return new Promise((r) => setTimeout(r, 150)); }
 
   async login(token) {
@@ -176,7 +180,7 @@ class Phone {
     await this.settle();
   }
   async click(id) { this.el(id).fire("click"); await this.settle(); }
-  /** 點下去但不等回應，用來檢查畫面有沒有先動 */
+  /** Clicks without awaiting the response, to check the screen moved first */
   clickNow(id) { this.el(id).fire("click"); }
   tapChoiceNow(text) {
     const button = this.el("q-choices").children.find((c) => c.dataset.choice === text);
@@ -192,7 +196,7 @@ class Phone {
   }
   async poll() { await this.sandbox.refreshState?.(); await this.settle(); }
 
-  /** 目前顯示哪個畫面 */
+  /** Which screen is showing right now */
   screen() {
     for (const id of ["stage", "panel-wait", "panel-question", "panel-result"]) {
       if (this.els[id] && !this.els[id].hidden) return id;
@@ -200,7 +204,7 @@ class Phone {
     return "(none)";
   }
   choices() { return (this.els["q-choices"]?.children || []).map((c) => c.dataset.choice); }
-  /** 只收真的有票數欄位的選項 —— 隊員的按鈕根本不會有這個元素 */
+  /** Only choices that really carry a count field; a member's buttons have no such element */
   counts() {
     return Object.fromEntries((this.els["q-choices"]?.children || [])
       .filter((c) => c.querySelector(".choice-count"))
@@ -214,7 +218,7 @@ class Phone {
 }
 
 
-// ---------------------------------------------------------------- 伺服器
+// ---------------------------------------------------------------- Server
 
 const BOOT = `
 import os, sys, tempfile
@@ -238,14 +242,14 @@ async function boot() {
   let stderr = "";
   server.stderr.on("data", (d) => { stderr += d; });
   for (let i = 0; i < 100; i++) {
-    try { await fetch(BASE + "/"); return server; } catch { /* 還沒起來 */ }
+    try { await fetch(BASE + "/"); return server; } catch { /* Not up yet */ }
     await new Promise((r) => setTimeout(r, 100));
   }
   server.kill();
   throw new Error("伺服器起不來：\n" + stderr);
 }
 
-/** 題目來自 questions.yaml，測試只需要一題有這些選項的。 */
+/** The question comes from questions.yaml; these tests only need one with these choices. */
 const QID = "ABCDE";
 const A = "火車";
 const B = "恐龍";
@@ -259,17 +263,17 @@ check("無痕模式下重新整理不會變成另一個人", async () => {
   await leader.login(LEADER);
   await leader.type(QID);
 
-  const session = new Map();             // 同一個分頁的 sessionStorage
+  const session = new Map();             // sessionStorage of the same tab
   const first = new Phone("M1", BASE, { __session: session, __private: true });
   await first.login(MEMBER);
   await first.poll();
   await first.tapChoice(A);
   first.close();
 
-  const reloaded = new Phone("M1b", BASE, { __session: session, __private: true });  // 重新整理
+  const reloaded = new Phone("M1b", BASE, { __session: session, __private: true });  // Reload
   await reloaded.login(MEMBER);
   await reloaded.poll();
-  await reloaded.tapChoice(B);           // 同一個人改投另一個
+  await reloaded.tapChoice(B);           // Same person switches their vote
 
   await leader.poll();
   assert.equal(leader.text("q-tally").match(/已投 (\d+)/)[1], "1",
@@ -291,7 +295,7 @@ check("投票中不再空轉掃描迴圈", async () => {
   await leader.wait(600);
   assert.ok(leader.frames <= 1, `投票中還跑了 ${leader.frames} 幀，應該停下來`);
 
-  await leader.click("q-cancel");        // 回到等待
+  await leader.click("q-cancel");        // Back to waiting
   leader.frames = 0;
   await leader.wait(300);
   assert.ok(leader.frames > 5, `回到等待後迴圈要醒過來，只跑了 ${leader.frames} 幀`);
@@ -309,13 +313,13 @@ check("下一題送不出去時，立刻回到結果頁並說明，不是隔幾�
   await leader.click("q-submit");
   assert.equal(leader.screen(), "panel-result");
 
-  leader.hang = true;                    // 網路在這一刻斷了
+  leader.hang = true;                    // The network drops right here
   leader.clickNow("r-next");
   await leader.wait(100);
   assert.equal(leader.screen(), "stage", "先樂觀切過去");
 
   leader.hang = false;
-  await leader.wait(6800);               // 等逾時
+  await leader.wait(6800);               // Wait for the timeout
   assert.equal(leader.screen(), "panel-result", "失敗就要回到結果頁");
   assert.match(leader.text("toast"), /網路/, "而且要說明為什麼");
 });
@@ -328,10 +332,10 @@ check("取消後重掃同一題，隊員的選項順序要跟著換", async () =
     await leader.login(LEADER);
     await m1.login(MEMBER);
     await leader.type(QID);
-    await m1.poll();                     // 隊員看到第一次的洗牌結果
+    await m1.poll();                     // The member sees the first shuffle
 
-    await leader.click("q-cancel");      // 隊員的輪詢整段落在取消與重掃之間
-    await leader.type(QID);              // 重掃 → 伺服器重洗
+    await leader.click("q-cancel");      // Every member poll falls between the discard and the rescan
+    await leader.type(QID);              // Rescan, so the server reshuffles
     await m1.poll();
 
     if (JSON.stringify(m1.choices()) !== JSON.stringify(leader.choices())) {
@@ -351,9 +355,9 @@ check("切換鏡頭時輪詢插進來，不會漏掉 stream 也不會切回去",
   await leader.wait(200);
   assert.equal(leader.liveTracks, 1, "應該剛好一條 stream");
 
-  leader.camDelay = 900;                 // 手機上 getUserMedia 要 0.3-2 秒
+  leader.camDelay = 900;                 // getUserMedia takes 0.3-2s on a phone
   leader.clickNow("cam-switch");
-  await leader.wait(1600);               // 這段期間至少有一次輪詢
+  await leader.wait(1600);               // At least one poll happens in this window
 
   assert.equal(leader.liveTracks, 1, `有 ${leader.liveTracks} 條 track 沒被關掉`);
   assert.ok(leader.streams <= 3, `開了 ${leader.streams} 條 stream，太多了`);
@@ -368,20 +372,22 @@ check("投票前算好、投票後才送達的輪詢回應，不可以抹掉選�
   await m1.poll();
   const choice = m1.choices()[0];
 
-  // /api/state 的回應被下行拖慢：伺服器早就算好（還沒有票），送達時票已經進去了
+  // The /api/state response is held up by the downlink: the server computed it
+  // before any vote, and by the time it arrives the vote has landed
   m1.slowPath = "/api/state";
   m1.delay = 1200;
-  m1.poll();                             // 不等，這一發帶的是「還沒投票」的狀態
+  m1.poll();                             // Not awaited; this one carries the pre-vote state
   await m1.wait(150);
-  m1.slowPath = "/api/vote";             // 投票本身要快
+  m1.slowPath = "/api/vote";             // The vote itself must be fast
   m1.delay = 0;
   await m1.tapChoice(choice);
   assert.deepEqual(m1.checked(), [choice]);
 
-  // 全程取樣：過期回應送達的那一瞬間也不可以掉，之後被輪詢補回來不算過關
+  // Sampled throughout: it must not drop even for the instant the stale response
+  // arrives, and being restored by a later poll does not count as passing
   const seen = new Set();
   const sampler = setInterval(() => seen.add(m1.checked().join(",") + "|" + m1.text("q-tally")), 20);
-  await m1.wait(1600);                   // 那個過期的 state 現在才送達
+  await m1.wait(1600);                   // The stale state only arrives now
   clearInterval(sampler);
   const bad = [...seen].filter((v) => !v.startsWith(choice + "|") || /已投 0/.test(v));
   assert.deepEqual(bad, [], `中途閃過的畫面：${bad.join("  /  ")}`);
@@ -391,19 +397,20 @@ check("投票前算好、投票後才送達的輪詢回應，不可以抹掉選�
 
 check("登入時網路一閃，恢復後會自己接回來", async () => {
   const phone = new Phone("M1", BASE);
-  phone.hang = true;                     // 登入請求飛不回來
-  phone.login(MEMBER);                   // 不等
+  phone.hang = true;                     // The login request never returns
+  phone.login(MEMBER);                   // Not awaited
   await phone.wait(500);
-  phone.hang = false;                    // 網路很快就回來了，但那一發已經卡住
-  await phone.wait(6500);                // 等它逾時
+  phone.hang = false;                    // The network recovers fast, but that request is already stuck
+  await phone.wait(6500);                // Wait for it to time out
   assert.match(phone.text("toast"), /網路/, "要先告訴使用者失敗了");
 
-  await phone.wait(2000);                // 輪詢自己拿存著的 token 重試
+  await phone.wait(2000);                // Polling retries with the stored token on its own
   assert.equal(phone.screen(), "panel-wait", "應該自己接回來，不用重新整理");
 });
 
 check("存著的舊 token 失效後，重打新 token 仍然是登入", async () => {
-  // 真實情境：localStorage 裡有上一場留下的 token，開頁時自動登入失敗
+  // Real scenario: localStorage holds a token left over from the last event, and
+  // the automatic login on page open fails
   const phone = new Phone("M1", BASE, { "treasure.token": "stale-token-from-last-time" });
   await phone.wait(400);
   assert.equal(phone.el("bar").hidden, true, "自動登入應該失敗");
@@ -423,7 +430,7 @@ check("卡住的請求會逾時，手機不會被凍住", async () => {
   await leader.type(QID);
   await m1.poll();
 
-  m1.hang = true;                       // 這一票永遠飛不回來
+  m1.hang = true;                       // This vote never comes back
   m1.tapChoiceNow(m1.choices()[0]);
   await m1.wait(1000);
   m1.sent = [];
@@ -431,7 +438,7 @@ check("卡住的請求會逾時，手機不會被凍住", async () => {
   assert.equal(m1.sent.length, 0, "卡住期間輪詢確實停住了（預期行為）");
 
   m1.hang = false;
-  await m1.wait(9000);                  // 等逾時觸發
+  await m1.wait(9000);                  // Wait for the timeout to fire
   assert.ok(m1.sent.length > 0, `逾時後應該恢復輪詢，實際只送了 ${m1.sent.length} 個請求`);
   assert.match(m1.text("toast"), /網路|逾時|連不上/, "要告訴使用者發生什麼事");
 });
@@ -443,7 +450,7 @@ check("按下一題後，鏡頭裡還是同一張貼紙也不會被彈回結果�
   await leader.login(LEADER);
   await m1.login(MEMBER);
   await leader.click("scan-toggle");
-  leader.aimAt(QID);                     // 對著牆上的題目貼紙
+  leader.aimAt(QID);                     // Pointed at the question sticker on the wall
   await leader.wait(300);
   assert.equal(leader.screen(), "panel-question", "應該掃到題目了");
 
@@ -453,13 +460,14 @@ check("按下一題後，鏡頭裡還是同一張貼紙也不會被彈回結果�
   await leader.click("q-submit");
   assert.equal(leader.screen(), "panel-result");
 
-  await leader.click("r-next");           // 貼紙還在鏡頭裡
+  await leader.click("r-next");           // The sticker is still in frame
   await leader.wait(500);
   assert.equal(leader.screen(), "stage", "不可以被同一張貼紙彈回結果頁");
 });
 
 check("CSS 沒有蓋掉 hidden 屬性", async () => {
-  // DOM stub 只看 el.hidden，永遠抓不到這個 —— 這是靜態檢查
+  // The DOM stub only looks at el.hidden and could never catch this, so this is
+  // a static check
   const css = fs.readFileSync(path.join(__dirname, "static", "style.css"), "utf8");
   assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
     "少了 [hidden] 的保險規則：.ghost 的 display: block 會蓋過瀏覽器的 "
@@ -526,7 +534,7 @@ check("隊員投票、改票；隊輔即時看到票數，隊員看不到", asyn
   assert.match(leader.text("q-tally"), /已投 3\/3/);
   assert.match(m1.text("q-tally"), /已投 \d+\/\d+/, "隊員看得到參與人數");
 
-  await m1.tapChoice(B);          // 改票
+  await m1.tapChoice(B);          // Changes the vote
   await leader.poll();
   assert.equal(leader.counts()[A], "1");
   assert.equal(leader.counts()[B], "2");
@@ -542,18 +550,18 @@ check("RTT 期間的第二次點擊不會被丟掉", async () => {
   await m1.poll();
   const [first, second] = m1.choices();
 
-  m1.delay = 400;                       // 一趟來回 400ms
+  m1.delay = 400;                       // 400ms per round trip
   m1.tapChoiceNow(first);
   await m1.wait(80);
-  m1.tapChoiceNow(second);              // 第一票還在飛的時候改主意
+  m1.tapChoiceNow(second);              // Changes their mind while the first vote is in flight
   await m1.wait(80);
   assert.deepEqual(m1.checked(), [second], "畫面要顯示第二次點的");
 
-  // 整段期間畫面都不可以閃回第一次點的那個
+  // Throughout, the screen must never flash back to the first tap
   const seen = new Set();
   const sampler = setInterval(() => seen.add(m1.checked().join(",")), 20);
   m1.delay = 0;
-  await m1.wait(1200);                  // 等兩趟都收斂
+  await m1.wait(1200);                  // Wait for both round trips to settle
   clearInterval(sampler);
   assert.deepEqual([...seen], [second], `畫面中途閃過：${[...seen].join(" → ")}`);
   assert.deepEqual(m1.checked(), [second], "畫面不可以無聲倒回第一次點的");
@@ -575,7 +583,7 @@ check("重複點同一個選項不會送出多餘的請求", async () => {
   m1.sent = [];
   m1.tapChoiceNow(only);
   await m1.wait(80);
-  m1.tapChoiceNow(only);                // 同一個選項連點兩下
+  m1.tapChoiceNow(only);                // Taps the same choice twice
   m1.delay = 0;
   await m1.wait(1200);
   const votes = m1.sent.filter((p) => p === "/api/vote");
@@ -586,7 +594,7 @@ check("回應比輪詢週期慢時，輪詢不會堆疊", async () => {
   const m1 = new Phone("M1", BASE);
   await m1.login(MEMBER);
   m1.maxInflight = 0;
-  m1.delay = 1500;                      // 比 POLL_INTERVAL 還久
+  m1.delay = 1500;                      // Longer than POLL_INTERVAL
   await m1.wait(4000);
   assert.equal(m1.maxInflight, 1, `同時在飛 ${m1.maxInflight} 個請求，應該只有 1 個`);
 });
@@ -599,17 +607,17 @@ check("隊員點選項立刻反白，不等伺服器回應", async () => {
   await leader.type(QID);
   await m1.poll();
 
-  m1.delay = 1500;                      // 比 1 秒的輪詢週期還久：中途會有一次輪詢
+  m1.delay = 1500;                      // Longer than the poll interval, so a poll lands in between
   m1.tapChoiceNow(A);
-  await m1.wait(60);                    // 遠早於回應
+  await m1.wait(60);                    // Well before the response
   assert.deepEqual(m1.checked(), [A], "點下去就要反白");
   assert.match(m1.text("q-tally"), /已投 1\//, "已投人數也要立刻跳");
 
-  await m1.wait(1000);                  // 跨過一次輪詢
+  await m1.wait(1000);                  // Across one poll
   assert.deepEqual(m1.checked(), [A], "中途的輪詢不可以把樂觀更新蓋回去");
 
   m1.delay = 0;
-  await m1.wait(1000);                  // 等回應收斂
+  await m1.wait(1000);                  // Wait for the response to settle
   assert.deepEqual(m1.checked(), [A], "伺服器回來後結果一致");
   await leader.poll();
   assert.equal(leader.counts()[A], "1");
@@ -689,7 +697,7 @@ check("平手換人時，隊輔已點的選項要取消，送出鈕重新鎖住"
   assert.match(leader.text("q-submit"), new RegExp(`送出「${A}」`));
   assert.deepEqual(leader.checked(), [A]);
 
-  await m1.tapChoice(C);            // 平手組合從 A/B 變成 B/C
+  await m1.tapChoice(C);            // The tie moves from A/B to B/C
   await leader.poll();
   assert.deepEqual(leader.checked(), [], "票數變了，隊輔的選擇要取消");
   assert.equal(leader.el("q-submit").disabled, true, "平手換人後要重新鎖住");
@@ -697,7 +705,7 @@ check("平手換人時，隊輔已點的選項要取消，送出鈕重新鎖住"
     "送出鈕不可以還指著已經不在平手名單裡的選項");
   assert.match(leader.text("q-submit"), /同票/);
 
-  await leader.tapChoice(C);        // 重新點一個，才又能送
+  await leader.tapChoice(C);        // Pick again before submit unlocks
   assert.equal(leader.el("q-submit").disabled, false);
   assert.match(leader.text("q-submit"), new RegExp(`送出「${C}」`));
 });
@@ -715,7 +723,7 @@ check("票數變動讓平手消失時，送出鈕指向新的最高票", async (
   await leader.poll();
   await leader.tapChoice(A);
 
-  await m1.tapChoice(B);            // 變成 B 獨走
+  await m1.tapChoice(B);            // B pulls ahead alone
   await leader.poll();
   assert.deepEqual(leader.checked(), []);
   assert.equal(leader.el("q-submit").disabled, false);

@@ -1,4 +1,5 @@
-/* 校園尋寶 — 藏寶圖明亮風。戶外白天可讀性優先，故不做深色模式。 */
+/* Campus treasure hunt, bright treasure-map look. Daylight readability comes
+   first, so there is no dark mode. */
 
 :root {
   color-scheme: light;
@@ -28,8 +29,9 @@
 
 * { box-sizing: border-box; }
 
-/* 作者樣式的 display 會蓋過瀏覽器 UA 的 [hidden] { display: none }，所以
-   .ghost、.scores 這種有設 display 的元素光靠 el.x.hidden = true 藏不掉。 */
+/* An author display rule beats the UA's [hidden] { display: none }, so elements
+   that set display, like .ghost and .scores, cannot be hidden by el.x.hidden
+   alone. */
 [hidden] { display: none !important; }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -43,7 +45,7 @@ body {
   overflow-x: hidden;
 }
 
-/* 紙張顆粒：一張 SVG 雜訊鋪底，讓米色不死板 */
+/* Paper grain: one SVG noise tile underneath, to keep the beige from going flat */
 body::before {
   content: "";
   position: fixed;
@@ -63,7 +65,7 @@ body::before {
   padding: 1.25rem var(--pad) calc(2.5rem + env(safe-area-inset-bottom));
 }
 
-/* ---------- 上方分數列 ---------- */
+/* ---------- Score bar ---------- */
 
 .bar {
   position: sticky;
@@ -121,7 +123,7 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 舞台（登入 / 掃描） ---------- */
+/* ---------- Stage (login / scanning) ---------- */
 
 .stage-head { text-align: center; margin-bottom: 1.1rem; }
 
@@ -143,7 +145,7 @@ body::before {
   font-size: .92rem;
 }
 
-/* ---------- 相機 ---------- */
+/* ---------- Camera ---------- */
 
 .scanner {
   margin: 0 calc(var(--pad) * -1) 1rem;
@@ -203,7 +205,7 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 輸入 ---------- */
+/* ---------- Input ---------- */
 
 .entry { display: flex; gap: .5rem; margin-top: .85rem; }
 
@@ -282,7 +284,7 @@ body::before {
   box-shadow: 0 14px 32px -16px oklch(20% .03 60 / .95);
 }
 
-/* ---------- 題目 ---------- */
+/* ---------- Question ---------- */
 
 .meta {
   margin: 0 0 .5rem;
@@ -294,7 +296,8 @@ body::before {
 
 .question { font-size: var(--text-q); line-height: 1.45; margin-bottom: 1rem; }
 
-/* 固定比例容器：圖片載入前後高度不變，選項不會往下跳 */
+/* Fixed aspect box: height does not change as the image loads, so the choices
+   never jump down */
 .figure {
   margin: 0 0 1.1rem;
   aspect-ratio: 4 / 3;
@@ -348,7 +351,8 @@ body::before {
 
 #q-submit { width: 100%; }
 
-/* 隊輔平常只是在看票數，選項不是按鈕；平手時才變成可點 */
+/* The leader is normally just reading the tally and the choices are not buttons;
+   only a tie makes them tappable */
 .choice:disabled { cursor: default; opacity: 1; }
 .choice.tiebreak { border-style: dashed; border-color: var(--accent); cursor: pointer; }
 .choice-text { flex: 1; min-width: 0; }
@@ -370,13 +374,13 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 隊員等待 ---------- */
+/* ---------- Member waiting ---------- */
 
 .wait { text-align: center; padding-top: 3rem; }
 .wait .display { font-size: var(--text-hero); }
 .wait .hint { margin-top: .6rem; }
 
-/* 三顆點慢慢呼吸，讓「還活著」看得出來 */
+/* Three dots breathing slowly, so it visibly still alive */
 .wait-mark {
   width: 76px;
   height: 12px;
@@ -390,7 +394,7 @@ body::before {
 }
 @keyframes breathe { 50% { opacity: 1; } }
 
-/* ---------- 結果的票數 ---------- */
+/* ---------- Result tally ---------- */
 
 .votes {
   display: grid;
@@ -419,10 +423,10 @@ body::before {
 }
 .votes li.right .bars { color: var(--ok); }
 
-/* ---------- 結果 ---------- */
+/* ---------- Result ---------- */
 
 .result { text-align: center; padding-top: 1.5rem; }
-/* 對錯標記用 CSS 畫，不依賴任何字型或 emoji */
+/* Right and wrong marks are drawn in CSS, depending on no font or emoji */
 .mark {
   position: relative;
   width: 76px;

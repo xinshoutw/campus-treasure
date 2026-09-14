@@ -17,7 +17,7 @@
 
 <main class="wrap">
 
-  <!-- 登入（兩種角色）與隊輔掃題目共用同一個舞台 -->
+  <!-- Login (both roles) and the leader's question scanning share one stage -->
   <section id="stage" class="stage" hidden>
     <div class="stage-head">
       <h1 id="stage-title" class="display">校園尋寶</h1>
@@ -42,14 +42,14 @@
     </form>
   </section>
 
-  <!-- 隊員等待隊輔掃題目 -->
+  <!-- Members waiting for the leader to scan a question -->
   <section id="panel-wait" class="panel wait" hidden>
     <p class="wait-mark" aria-hidden="true"></p>
     <h2 id="wait-title" class="display">等待題目中</h2>
     <p class="hint">隊輔掃描題目後，題目會出現在這裡</p>
   </section>
 
-  <!-- 投票中（兩種角色共用，內容依角色而異） -->
+  <!-- Voting: shared by both roles, contents differ per role -->
   <section id="panel-question" class="panel" hidden>
     <p id="q-meta" class="meta"></p>
     <h2 id="q-content" class="display question"></h2>
@@ -60,7 +60,7 @@
     <button id="q-cancel" class="ghost" type="button" hidden>取消這一題</button>
   </section>
 
-  <!-- 公開結果 -->
+  <!-- Public result -->
   <section id="panel-result" class="panel result" hidden>
     <p id="r-mark" class="mark" aria-hidden="true"></p>
     <h2 id="r-title" class="display"></h2>

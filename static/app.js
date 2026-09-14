@@ -1,13 +1,16 @@
 "use strict";
 
-/* 校園尋寶前端。
+/* Campus treasure hunt frontend.
  *
- * 畫面完全由伺服器的 /api/state 決定：每秒拉一次，拿到什麼就畫什麼。
- * 前端自己只留三個東西 —— token、device id、平手時隊輔點的那個選項。
+ * The server's /api/state decides everything on screen: poll it, draw whatever
+ * comes back. The client keeps only three things of its own: the token, the
+ * device id, and the choice the leader picked to break a tie.
  *
- * 角色：
- *   leader  掃題目開局、看各選項票數、決定送出。相機只在等待時開著。
- *   member  只掃一次登入 QR，之後相機永久關閉，等隊輔開題目再投票。
+ * Roles:
+ *   leader  scans to open a round, sees the tally, decides what to submit.
+ *           The camera runs only while waiting.
+ *   member  scans the login QR once, after which the camera is off for good,
+ *           then votes when the leader opens a question.
  */
 
 const $ = (id) => document.getElementById(id);
@@ -28,14 +31,15 @@ const el = {
 };
 
 const ID_RE = /^[A-Z]{5}$/;
-const SCAN_INTERVAL = 100;   // ms，約 10fps
-const SCAN_MAX_EDGE = 640;   // 解碼前先降採樣，避免主執行緒卡頓
-const RESCAN_MISSES = 8;     // 同一組代碼要離開鏡頭這麼多幀才會再次觸發
-// 300ms：實測伺服器處理 ~3ms，42 台裝置合計 140 req/s，而 96 台跑 95 req/s
-// 時 p50 還是 1.6ms。真正的代價是隊員的行動網路流量（每台每小時約 3MB）。
-// polling 那道鎖會讓回應比週期慢時自動跳過，不會堆疊。
+const SCAN_INTERVAL = 100;   // ms, about 10fps
+const SCAN_MAX_EDGE = 640;   // Downsample before decoding, to keep the main thread smooth
+const RESCAN_MISSES = 8;     // Frames the same code must be out of frame before it fires again
+// 300ms: measured, the server takes ~3ms, 42 devices add up to 140 req/s, and
+// at 96 devices running 95 req/s p50 is still 1.6ms. The real cost is member
+// mobile data, roughly 3MB per device per hour. The polling flag skips a tick
+// when a response runs slower than the interval, so requests never stack up.
 const POLL_INTERVAL = 300;
-const REQUEST_TIMEOUT = 6000;   // ms。行動網路上請求可能永遠不回來，不能讓它卡死整支手機
+const REQUEST_TIMEOUT = 6000;   // ms. On mobile a request may never return, and it must not wedge the phone
 const TOAST_MS = 3200;
 const KEY_TOKEN = "treasure.token";
 const KEY_DEVICE = "treasure.device";
@@ -45,9 +49,9 @@ const CHOICE_KEYS = "ABCDEFGHIJ";
 const ctx = el.canvas.getContext("2d", { willReadFrequently: true });
 
 const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
-// 無痕模式下 localStorage 可能整個不能寫。device id 掉了的話，同一個人
-// 重新整理就變成另一台裝置，票會被算成兩票 —— 所以退到 sessionStorage，
-// 它在同一個分頁裡撐得過重新整理。
+// In private mode localStorage can be entirely unwritable. Losing the device id
+// turns one person reloading into a second device and their vote gets counted
+// twice, so fall back to sessionStorage, which survives a reload in the same tab.
 const backends = [
   () => localStorage,
   () => sessionStorage,
@@ -59,19 +63,19 @@ const store = {
       try {
         const value = at().getItem(key);
         if (value !== null) return value;
-      } catch { /* 這層不能用，換下一層 */ }
+      } catch { /* This backend is unusable, try the next one */ }
     }
     return null;
   },
   set(key, value) {
     for (const at of backends) {
-      try { at().setItem(key, value); return true; } catch { /* 換下一層 */ }
+      try { at().setItem(key, value); return true; } catch { /* Try the next one */ }
     }
     return false;
   },
   drop(key) {
     for (const at of backends) {
-      try { at().removeItem(key); } catch { /* 沒這層就算了 */ }
+      try { at().removeItem(key); } catch { /* No such backend, never mind */ }
     }
   },
 };
@@ -84,21 +88,21 @@ if (!device) {
 }
 
 let state = null;
-let pick = null;             // 平手時隊輔點的選項，只活在這台手機上
-let rendered = "";           // 目前畫面的身分，變了才重建 DOM
-let appliedVersion = -1;     // 已經畫上去的伺服器版本，用來丟掉過期回應
-let tallied = "";            // 票數的指紋，變了就取消隊輔已點的選項
+let pick = null;             // The leader's tiebreak choice, local to this phone
+let rendered = "";           // Identity of what is on screen; a change rebuilds the DOM
+let appliedVersion = -1;     // Server version already drawn, used to drop stale responses
+let tallied = "";            // Fingerprint of the tally; a change clears the leader's pick
 let busy = false;
-let polling = false;         // 同時只允許一次輪詢在飛
-let pendingVote = null;      // 上一票還在飛時又點的那個選項
-let shownWinner = null;      // 送出鈕上寫的那個選項，就是會送出去的那個
+let polling = false;         // Only one poll in flight at a time
+let pendingVote = null;      // A choice tapped while the previous vote was still in flight
+let shownWinner = null;      // The choice written on the submit button, and the one submitted
 
 let stream = null;
 let cameras = [];
 let cameraIndex = 0;
-let cameraGranted = false;   // 成功開過一次，之後每局自動接回來
+let cameraGranted = false;   // Opened once successfully, so later rounds reconnect on their own
 let cameraOpening = false;
-let cameraGen = 0;           // 每次開啟的序號，晚到的 stream 靠它判斷該不該丟掉
+let cameraGen = 0;           // Sequence per open, so a late stream knows to drop itself
 let rafId = 0;
 let lastFrame = 0;
 let lastCode = "";
@@ -118,14 +122,14 @@ async function api(path, options = {}) {
 
   let res;
   try {
-    // 沒有逾時的話，一個卡住的請求會讓 busy 永遠是 true：輪詢停掉、
-    // 每個按鈕都沒反應，直到作業系統的 TCP timeout（數十秒）才解開
+    // Without a timeout, one stuck request leaves busy true forever: polling
+    // stops and every button goes dead until the OS TCP timeout, tens of seconds
     res = await fetch(path, { ...options, headers, signal: AbortSignal.timeout?.(REQUEST_TIMEOUT) });
   } catch {
     throw new Error("網路不穩，沒送出去，再試一次");
   }
   let data = {};
-  try { data = await res.json(); } catch { /* 非 JSON 回應 */ }
+  try { data = await res.json(); } catch { /* Not a JSON response */ }
   if (!res.ok) {
     const err = new Error(data.error || `伺服器錯誤（${res.status}）`);
     err.status = res.status;
@@ -137,10 +141,10 @@ async function api(path, options = {}) {
 const post = (path, body) =>
   api(path, { method: "POST", body: JSON.stringify(body || {}) });
 
-/** 先照使用者的動作把畫面改掉，再送出去讓伺服器確認。
+/** Paints the user's action first, then sends it for the server to confirm.
  *
- * 送不出去也不會卡住錯的畫面：act 的 catch 會提示，而且下一次輪詢（1 秒內）
- * 就會用伺服器的狀態蓋回來。 */
+ * A failed send never leaves a wrong screen behind: act's catch shows a toast,
+ * and the next poll overwrites it with server state within a fraction of a second. */
 function optimistic(patch) {
   apply({ ...state, ...patch });
 }
@@ -148,7 +152,7 @@ function optimistic(patch) {
 const IDLE_PATCH = { phase: "idle", question: undefined, counts: undefined, tie: undefined,
                      voted: undefined, result: undefined };
 
-/** 包住一次使用者動作：期間停掉輪詢與掃描，結束後把回傳的 state 畫上去。 */
+/** Wraps one user action: pauses polling and scanning, then paints the state it returns. */
 async function act(run) {
   if (busy) return;
   busy = true;
@@ -162,7 +166,7 @@ async function act(run) {
   }
 }
 
-// ---------------------------------------------------------------- 畫面
+// ---------------------------------------------------------------- Rendering
 
 function toast(message) {
   clearTimeout(toastId);
@@ -192,10 +196,12 @@ function renderBar(next) {
   el.progress.textContent = `解題數 ${next.answered}/${next.total} · 共 ${fmt(next.score)} 分`;
 }
 
-/** 伺服器說什麼就畫什麼。fresh 表示題目或階段換了，要重建 DOM。 */
+/** Draws whatever the server says. fresh means the question or phase changed and
+ *  the DOM has to be rebuilt. */
 function apply(next) {
-  // 慢下行會讓「投票前就算好」的回應在投票之後才送達，畫上去會把剛投的票
-  // 從畫面上抹掉。版本比已畫的舊就直接丟掉。
+  // A slow downlink delivers a response computed before the vote after the vote
+  // landed, and painting it would wipe the fresh vote off the screen. Anything
+  // older than what is already drawn gets dropped.
   if (next.v !== undefined) {
     if (next.v < appliedVersion) return;
     appliedVersion = next.v;
@@ -203,16 +209,19 @@ function apply(next) {
   state = next;
   renderBar(next);
 
-  // 選項順序也要進 key：取消後重掃同一題時伺服器會重洗，只看題號的話
-  // 輪詢整段落在取消與重掃之間的隊員永遠不會重建按鈕，順序就跟大家不一樣了
+  // Choice order belongs in the key too: rescanning the same question after a
+  // discard reshuffles it server-side, and keyed on the question id alone a
+  // member whose polls all fell between the two would never rebuild the buttons
+  // and would end up with a different order from everyone else
   const key = `${next.role}:${next.phase}:${next.question?.id ?? ""}`
     + `:${(next.question?.choices ?? []).join("\u0000")}`;
   const fresh = key !== rendered;
   rendered = key;
   if (fresh) pick = null;
 
-  // 票數一有異動就取消隊輔已點的選項：平手的組合可能已經換人，留著會讓
-  // 送出鈕指著一個根本不在平手名單裡的答案
+  // Any change in the tally clears the leader's pick: the tie may now be between
+  // different choices, and keeping it would point submit at an answer that is no
+  // longer tied at all
   const tally = JSON.stringify(next.counts ?? null);
   if (tally !== tallied) { tallied = tally; pick = null; }
 
@@ -259,14 +268,15 @@ function renderLogin() {
   setCamera(true);
 }
 
-// ---------------------------------------------------------------- 投票中
+// ---------------------------------------------------------------- Voting
 
 function renderVoting(next, fresh) {
   const q = next.question;
   const leader = next.role === "leader";
 
   if (fresh) {
-    // 隊員看不到題目代碼：貼紙是隊輔在掃的，代碼對隊員沒有用途
+    // Members do not see the question code: the leader scans the sticker and the
+    // code is of no use to them
     el.qMeta.textContent = leader ? `${q.id} · ${fmt(q.points)} 分` : `${fmt(q.points)} 分`;
     el.qContent.textContent = q.content;
     el.qFigure.hidden = !q.image;
@@ -286,9 +296,9 @@ function renderVoting(next, fresh) {
     const chosen = leader ? pick === text : next.my_choice === text;
     button.setAttribute("aria-checked", String(chosen));
     if (leader) {
-      // 隊輔平常不能點選項，只有平手時才用來指定送哪一個
+      // The leader cannot normally tap a choice, only to settle a tie
       button.disabled = !tie.includes(text);
-      button.classList.toggle("tiebreak", tie.includes(text));   // 平手時才看得出來能點
+      button.classList.toggle("tiebreak", tie.includes(text));   // Only a tie makes them look tappable
       button.querySelector(".choice-count").textContent = next.counts[text] ?? 0;
     }
   }
@@ -349,17 +359,19 @@ function onChoice(text, leader) {
     renderVoting(state, false);
     return;
   }
-  // 先反白再送：不要讓使用者為了一趟網路來回而懷疑自己沒點到
+  // Highlight first, then send: nobody should doubt their own tap for a round trip
   optimistic({ my_choice: text, voted: state.voted + (state.my_choice ? 0 : 1) });
   castVote(text);
 }
 
-// ---------------------------------------------------------------- 結果
+// ---------------------------------------------------------------- Result
 
-/** 送出這一票。上一票還在飛的話記住最後一次，等它回來再補送。
+/** Sends this vote. If the previous one is still in flight, remember the latest
+ *  and send it once that returns.
  *
- * 直接丟掉會讓「最後一次點的算數」在有 RTT 的網路上變成假的：使用者看到自己
- * 改了，伺服器卻收到第一次那票，畫面過幾百毫秒又無聲倒回去。 */
+ * Dropping it instead would make "the last tap wins" a lie over any real RTT:
+ * the user sees their change, the server keeps the first vote, and a few hundred
+ * milliseconds later the screen silently rolls back. */
 function castVote(text) {
   if (busy) { pendingVote = text; return; }
   sendVote(text);
@@ -369,7 +381,7 @@ async function sendVote(text) {
   busy = true;
   try {
     const next = await post("/api/vote", { choice: text });
-    if (pendingVote === null) apply(next);   // 期間又點了，別把舊的畫回去
+    if (pendingVote === null) apply(next);   // Tapped again meanwhile, do not repaint the old one
   } catch (err) {
     if (err.status === 401) logout();
     else toast(err.message);
@@ -417,11 +429,12 @@ function renderResult(next, fresh) {
   el.rNext.disabled = false;
 }
 
-// ---------------------------------------------------------------- 相機
+// ---------------------------------------------------------------- Camera
 
 function setCamera(on) {
   if (on) {
-    // 上一局結束時相機被關掉了，權限拿過就直接接回來，不用隊輔每題手動按一次
+    // The camera was shut off when the last round ended. Once permission is
+    // granted, reconnect automatically instead of a tap per question
     if (!stream && cameraGranted) { openCamera(); return; }
     el.scanner.hidden = !stream;
     el.scanToggle.hidden = Boolean(stream);
@@ -454,9 +467,9 @@ async function startCamera(preferredId) {
   }
   if (!opened) throw lastError || new Error("no camera");
 
-  // getUserMedia 在手機上要 0.3-2 秒。這段期間有更新的開啟開始了的話，
-  // 這條 stream 已經沒人要了 —— 不主動關掉的話 track 會一直活著，
-  // 相機指示燈整場亮著，而且畫面會被舊的那條蓋回去
+  // getUserMedia takes 0.3-2s on a phone. If a newer open started meanwhile,
+  // nobody wants this stream: leaving it be keeps the track alive, the camera
+  // indicator lit for the whole event, and the older stream painting over the view
   if (gen !== cameraGen) {
     opened.getTracks().forEach((t) => t.stop());
     return;
@@ -465,7 +478,7 @@ async function startCamera(preferredId) {
   stream = opened;
   cameraGranted = true;
   el.video.srcObject = stream;
-  await el.video.play().catch(() => { /* iOS 偶爾拒絕自動播放 */ });
+  await el.video.play().catch(() => { /* iOS occasionally refuses autoplay */ });
   await refreshCameraList();
   setCamera(true);
 }
@@ -473,13 +486,14 @@ async function startCamera(preferredId) {
 function stopCamera() {
   if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-  // 這裡不能清 lastCode。相機每一局都會關掉再開，清掉的話按「下一題」時
-  // 鏡頭若還對著剛才那張貼紙，會立刻再掃一次、把全隊彈回結果頁。
-  // 解除封鎖只由 RESCAN_MISSES 負責，也就是貼紙真的離開鏡頭。
+  // lastCode must not be cleared here. The camera closes and reopens every round,
+  // and clearing it would mean that pressing next with the lens still on the same
+  // sticker instantly rescans it and throws the team back to the result screen.
+  // Only RESCAN_MISSES unblocks it, which means the sticker really left frame.
 }
 
 async function refreshCameraList() {
-  // deviceId 與 label 都要拿到相機權限之後才讀得到
+  // Both deviceId and label are only readable after camera permission is granted
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
   cameras = devices.filter((d) => d.kind === "videoinput" && d.deviceId);
 
@@ -497,7 +511,7 @@ async function refreshCameraList() {
 async function cycleCamera() {
   if (cameras.length < 2 || cameraOpening) return;
   const next = cameras[(cameraIndex + 1) % cameras.length].deviceId;
-  cameraOpening = true;   // 沒有這道鎖，等待中的輪詢會另外開一條 stream 把鏡頭切回去
+  cameraOpening = true;   // Without this lock, a poll while waiting opens a second stream and switches back
   try {
     await startCamera(next);
   } catch {
@@ -508,7 +522,7 @@ async function cycleCamera() {
 }
 
 function openCamera() {
-  // 等待時每秒輪詢一次都會叫到這裡，相機還在開的時候不能再開一次
+  // Every poll while waiting calls in here, so do not open again mid-open
   if (cameraOpening) return;
   cameraOpening = true;
   startCamera(store.get(KEY_CAMERA))
@@ -522,7 +536,7 @@ function cameraMessage(err) {
   return "相機開不起來，可以直接輸入代碼";
 }
 
-// ---------------------------------------------------------------- 掃描
+// ---------------------------------------------------------------- Scanning
 
 function scanning() {
   return Boolean(stream) && (!state || (state.phase === "idle" && state.role === "leader"));
@@ -530,7 +544,7 @@ function scanning() {
 
 function resumeScanning() {
   if (!stream) return;
-  el.video.play().catch(() => { /* 面板切換後 iOS 可能暫停 */ });
+  el.video.play().catch(() => { /* iOS may pause after a panel switch */ });
   if (!rafId) rafId = requestAnimationFrame(tick);
 }
 
@@ -552,7 +566,8 @@ function tick(now) {
   const frame = ctx.getImageData(0, 0, el.canvas.width, el.canvas.height);
   const found = jsQR(frame.data, frame.width, frame.height, { inversionAttempts: "dontInvert" });
   if (!found?.data) {
-    // 連續數幀都沒看到 QR，才算貼紙離開鏡頭、解除封鎖
+    // Only several consecutive frames without a QR count as the sticker leaving
+    // frame, which unblocks a rescan
     if (++misses >= RESCAN_MISSES) lastCode = "";
     return;
   }
@@ -575,27 +590,27 @@ function parseToken(text) {
   try {
     const found = new URL(text).searchParams.get("token");
     if (found) return found.trim();
-  } catch { /* 不是網址，就當成 token 本身 */ }
+  } catch { /* Not a URL, treat it as the token itself */ }
   return text.trim();
 }
 
-// ---------------------------------------------------------------- 登入
+// ---------------------------------------------------------------- Login
 
 async function login(value) {
   if (!value || busy) return;
   busy = true;
-  // 先存起來：網路一閃導致登入失敗時，輪詢才有東西可以拿去自動重試。
-  // 真的是無效 token 的話下面 401 會把它丟掉
+  // Store it first: when a network blip fails the login, polling needs something
+  // to retry with. A genuinely invalid token gets dropped by the 401 below
   store.set(KEY_TOKEN, value);
   try {
     const next = await api("/api/login", { method: "POST", body: JSON.stringify({ token: value }) });
     token = value;
     apply(next);
   } catch (err) {
-    // token 沒清掉的話，之後在輸入框打字會被當成題目代碼送去 /api/scan，
-    // 這支手機就再也登不進來了，只能重新整理
+    // Leaving the token set would make later typing in the field go to /api/scan
+    // as a question code, and this phone could never log in again without a reload
     token = null;
-    if (err.status === 401) store.drop(KEY_TOKEN);   // 過期的就別再試了
+    if (err.status === 401) store.drop(KEY_TOKEN);   // Expired, stop retrying it
     toast(err.message);
     renderLogin();
   } finally {
@@ -612,7 +627,7 @@ function logout() {
   toast("登入失效，請重新登入");
 }
 
-// ---------------------------------------------------------------- 輪詢
+// ---------------------------------------------------------------- Polling
 
 function startPolling() {
   clearInterval(pollId);
@@ -622,7 +637,7 @@ function startPolling() {
 async function refreshState() {
   if (busy || polling || document.hidden) return;
   if (!token) {
-    // 登入失敗（網路一閃）之後靠這裡自己接回來，不用使用者重新整理
+    // Recovers by itself after a login failed on a network blip, with no reload
     const saved = store.get(KEY_TOKEN);
     if (saved) login(saved);
     return;
@@ -630,7 +645,7 @@ async function refreshState() {
   polling = true;
   try {
     const next = await api("/api/state");
-    // 這趟飛的時候使用者動了手，那份狀態比較新，別用舊的蓋掉
+    // The user acted while this was in flight; that state is newer, do not overwrite it
     if (!busy) apply(next);
   } catch (err) {
     if (err.status === 401) logout();
@@ -639,7 +654,7 @@ async function refreshState() {
   }
 }
 
-// ---------------------------------------------------------------- 綁定
+// ---------------------------------------------------------------- Bindings
 
 el.form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -667,13 +682,15 @@ el.scanToggle.addEventListener("click", openCamera);
 el.camSwitch.addEventListener("click", cycleCamera);
 el.qSubmit.addEventListener("click", () => {
   if (busy) return;
-  el.qSubmit.disabled = true;   // 送出可能被伺服器擋（票數變了），所以只給按下去的回饋
-  // 送出的一定是按鈕上寫的那個。伺服器會重算並比對，對不上就擋下來
+  el.qSubmit.disabled = true;   // The server may reject this if the tally moved, so only acknowledge the press
+  // What gets submitted is always what the button says. The server recomputes and
+  // compares, and rejects a mismatch
   act(() => post("/api/submit", { choice: shownWinner, id: state.question.id }));
 });
 
-/** 取消／下一題：先切畫面不用等。真的送不出去就立刻切回來並說明 —— 讓它
- *  停在「已經過去了」的假畫面，隊輔會以為換題了，其實全隊還卡在原地。 */
+/** Discard or next: switch the screen without waiting. If the send really fails,
+ *  switch straight back and say so. Leaving a false "that's over" screen up would
+ *  have the leader believe they moved on while the team is still stuck. */
 async function closeRound() {
   if (busy) return;
   const before = state;
@@ -699,14 +716,14 @@ document.addEventListener("visibilitychange", () => {
   refreshState();
 });
 
-// ---------------------------------------------------------------- 啟動
+// ---------------------------------------------------------------- Startup
 
 renderLogin();
-startPolling();          // 一開始就跑，登入失敗也才有機會自己重試
+startPolling();          // Runs from the start, so a failed login can retry itself
 
 const urlToken = new URLSearchParams(location.search).get("token");
 if (urlToken) {
-  history.replaceState(null, "", location.pathname);  // 別把 token 留在網址列
+  history.replaceState(null, "", location.pathname);  // Do not leave the token in the address bar
   login(urlToken.trim());
 } else if (token) {
   login(token);
