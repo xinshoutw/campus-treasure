@@ -38,13 +38,14 @@ Front and back end for the NTUST CSIE campus treasure hunt. Find the QR codes hi
 git clone https://github.com/xinshoutw/campus-treasure.git
 cd campus-treasure
 
+cp .env.template .env   # fill in the tokens
 uv sync
 uv run src/main.py
 ```
 
 1. Validates `.env` (token uniqueness)
 2. Validates `questions.yaml` (id format and uniqueness, `answer` must be one of `choices`, 2-10 choices, positive `points`, correct field names)
-3. Caches the remote images in `image` into `static/cache/`
+3. Caches the remote images in `image` into `src/static/cache/`
 
 <br/>
 

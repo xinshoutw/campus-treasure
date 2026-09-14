@@ -38,13 +38,14 @@
 git clone https://github.com/xinshoutw/campus-treasure.git
 cd campus-treasure
 
+cp .env.template .env   # 填入 token
 uv sync
 uv run src/main.py
 ```
 
 1. 驗證 `.env`（Token 唯一性）
 2. 驗證 `questions.yaml`（id 格式與唯一性、answer 必須在 choices 裡、選項 2-10 個、points 為正數、欄位名稱無誤）
-3. 將 `image` 的遠端圖片快取保存到 `static/cache/`
+3. 將 `image` 的遠端圖片快取保存到 `src/static/cache/`
 
 <br/>
 
