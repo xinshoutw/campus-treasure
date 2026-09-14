@@ -2,19 +2,17 @@
 
 <h1>Campus Treasure Hunt</h1>
 
-<img width="820" src=".github/assets/hero.webp" alt="Leader screen while waiting for a question, with the six-team score bar on top" />
-
-<br>
-<br>
-
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![Flask](https://img.shields.io/badge/Flask-3-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com)
+[![License](https://img.shields.io/github/license/xinshoutw/campus-treasure?style=for-the-badge)](LICENSE)
 
 [繁體中文](README.md) | **English**
 
 </div>
 
 ## Overview
+
+<img align="right" width="420" alt="Leader screen while waiting for a question, with the six-team score bar on top" src=".github/assets/hero.webp" />
 
 Front and back end for the NTUST CSIE campus treasure hunt. Find the QR codes hidden around campus and solve the puzzles together with your leader and teammates
 
@@ -24,7 +22,7 @@ Front and back end for the NTUST CSIE campus treasure hunt. Find the QR codes hi
 - One submission per team per question
 - Only members can vote
 
-<br/>
+<br clear="right"/>
 
 ## Getting Started
 
@@ -143,6 +141,14 @@ Before opening a PR:
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 3. Branches named `feat/your-feature` or `fix/your-fix`
 4. No emoji
+
+<br/>
+
+## License
+
+Copyright (C) 2026 xinshoutw
+
+This project is licensed under the **GNU Affero General Public License v3.0 or later**. Full terms in [LICENSE](LICENSE)
 
 <br/>
 

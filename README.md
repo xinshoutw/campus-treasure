@@ -2,19 +2,17 @@
 
 <h1>校園尋寶</h1>
 
-<img width="820" src=".github/assets/hero.webp" alt="隊輔在等待題目時的畫面，上方是六隊分數列" />
-
-<br>
-<br>
-
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![Flask](https://img.shields.io/badge/Flask-3-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com)
+[![License](https://img.shields.io/github/license/xinshoutw/campus-treasure?style=for-the-badge)](LICENSE)
 
 **繁體中文** | [English](README-en.md)
 
 </div>
 
 ## 總覽
+
+<img align="right" width="420" alt="隊輔在等待題目時的畫面，上方是六隊分數列" src=".github/assets/hero.webp" />
 
 臺科資工校園尋寶活動的前後端。找到藏在校園中的 QR-Code，並與隊輔和組員一起解開謎題
 
@@ -24,7 +22,7 @@
 - 每隊一題只能提交一次
 - 僅組員可以投票
 
-<br/>
+<br clear="right"/>
 
 ## 快速開始
 
@@ -143,6 +141,14 @@ curl -X POST https://treasure.ntust.org/reset -H "X-Reset-Token: $RESET_TOKEN"
 2. commit 遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hant/v1.0.0/)
 3. 以 `feat/your-feature` 或 `fix/your-fix` 命名分支
 4. 不使用 Emoji
+
+<br/>
+
+## 授權
+
+Copyright (C) 2026 xinshoutw
+
+本專案採用 **GNU Affero General Public License v3.0 或更新版本** 授權，完整條款見 [LICENSE](LICENSE)
 
 <br/>
 
